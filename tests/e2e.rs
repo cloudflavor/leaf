@@ -369,7 +369,7 @@ fn query_tcp_raw(server: SocketAddr, request: &[u8]) -> io::Result<Message> {
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "request frame too large"))?;
 
     stream.write_all(&request_len.to_be_bytes())?;
-    stream.write_all(&request)?;
+    stream.write_all(request)?;
 
     let mut response_prefix = [0_u8; 2];
     stream.read_exact(&mut response_prefix)?;
