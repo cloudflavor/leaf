@@ -1,4 +1,4 @@
-FROM rust:nightly-bookworm AS build
+FROM docker.io/rustlang/rust:nightly AS build
 
 WORKDIR /app
 
