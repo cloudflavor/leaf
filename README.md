@@ -280,7 +280,7 @@ The GitLab pipeline (`.gitlab-ci.yml`) contains:
 - `cargo_test`
 - `cargo_test_extended`
 - `release` job (tag-only) that builds release binary and publishes `dist/leaf` artifact
-- `container_release` job (tag-only) that builds from `Containerfile` and pushes to Quay
+- `container_release` job (tag-only) that builds and publishes multi-arch (`amd64`, `arm64`) images to Quay
 
 Quay publish job requires these CI/CD variables:
 
@@ -291,6 +291,8 @@ Image destination defaults to:
 
 - `quay.io/cloudflavor/leaf:${GIT_COMMIT_TAG}` (fallback to `${CI_COMMIT_TAG}` in GitLab)
 - `quay.io/cloudflavor/leaf:latest`
+
+Both tags are published as a multi-arch manifest list.
 
 Local pipeline emulation with `opal`:
 
