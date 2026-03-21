@@ -217,6 +217,17 @@ The GitLab pipeline (`.gitlab-ci.yml`) contains:
 - `cargo_test`
 - `cargo_test_extended`
 - `release` job (tag-only) that builds release binary and publishes `dist/leaf` artifact
+- `container_release` job (tag-only) that builds from `Containerfile` and pushes to Quay
+
+Quay publish job requires these CI/CD variables:
+
+- `QUAY_USERNAME`
+- `QUAY_PASSWORD`
+
+Image destination defaults to:
+
+- `quay.io/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME:$CI_COMMIT_TAG`
+- `quay.io/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME:latest`
 
 Local pipeline emulation with `opal`:
 

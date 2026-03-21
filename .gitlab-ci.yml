@@ -66,3 +66,25 @@ release:
     expire_in: 30 days
   rules:
     - if: $CI_COMMIT_TAG
+
+container_release:
+  stage: release
+  image:
+    name: quay.io/buildah/stable:v1.39.3
+    entrypoint: [""]
+  variables:
+    QUAY_REGISTRY: "quay.io"
+    QUAY_ORG: "$CI_PROJECT_NAMESPACE"
+    QUAY_REPOSITORY: "$CI_PROJECT_NAME"
+    STORAGE_DRIVER: vfs
+    BUILDAH_ISOLATION: chroot
+  script:
+    - test -n "$QUAY_USERNAME"
+    - test -n "$QUAY_PASSWORD"
+    - IMAGE_REF="$QUAY_REGISTRY/$QUAY_ORG/$QUAY_REPOSITORY"
+    - buildah login -u "$QUAY_USERNAME" -p "$QUAY_PASSWORD" "$QUAY_REGISTRY"
+    - buildah bud --pull -f Containerfile -t "$IMAGE_REF:$CI_COMMIT_TAG" -t "$IMAGE_REF:latest" .
+    - buildah push "$IMAGE_REF:$CI_COMMIT_TAG"
+    - buildah push "$IMAGE_REF:latest"
+  rules:
+    - if: $CI_COMMIT_TAG && $QUAY_USERNAME && $QUAY_PASSWORD
