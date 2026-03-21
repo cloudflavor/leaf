@@ -77,6 +77,7 @@ container_release:
     QUAY_REGISTRY: "quay.io"
     QUAY_ORG: "cloudflavor"
     QUAY_REPOSITORY: "leaf"
+    TARGET_ARCHES: "amd64 arm64"
     STORAGE_DRIVER: vfs
     BUILDAH_ISOLATION: chroot
   script:
@@ -88,9 +89,16 @@ container_release:
     - QUAY_ORG="${QUAY_ORG:-cloudflavor}"
     - QUAY_REPOSITORY="${QUAY_REPOSITORY:-leaf}"
     - IMAGE_REF="$QUAY_REGISTRY/$QUAY_ORG/$QUAY_REPOSITORY"
+    - MANIFEST_NAME="leaf-manifest-${RELEASE_TAG}"
     - printf "%s" "$QUAY_PASSWORD" | buildah login --username "$QUAY_USERNAME" --password-stdin "$QUAY_REGISTRY"
-    - buildah bud --pull -f Containerfile -t "$IMAGE_REF:$RELEASE_TAG" -t "$IMAGE_REF:latest" .
-    - buildah push "$IMAGE_REF:$RELEASE_TAG"
-    - buildah push "$IMAGE_REF:latest"
+    - buildah manifest rm "$MANIFEST_NAME" >/dev/null 2>&1 || true
+    - buildah manifest create "$MANIFEST_NAME"
+    - |
+      for arch in $TARGET_ARCHES; do
+        buildah bud --pull --arch "$arch" --manifest "$MANIFEST_NAME" -f Containerfile .
+      done
+    - buildah manifest push --all "$MANIFEST_NAME" "docker://$IMAGE_REF:$RELEASE_TAG"
+    - buildah manifest push --all "$MANIFEST_NAME" "docker://$IMAGE_REF:latest"
+    - buildah manifest rm "$MANIFEST_NAME"
   rules:
     - if: $CI_COMMIT_TAG || $GIT_COMMIT_TAG
