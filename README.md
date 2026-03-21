@@ -41,11 +41,13 @@ Response policy:
 ## Project Layout
 
 - `src/main.rs`: runtime orchestration, UDP/TCP loops, timeouts, logging, limit enforcement.
-- `src/config.rs`: CLI/env parsing and config validation.
+- `src/config.rs`: CLI/env/TOML parsing, precedence merge, and validation.
 - `src/dns.rs`: authoritative DNS response logic.
 - `src/limits.rs`: query and TCP connection limiter implementations.
 - `tests/e2e.rs`: black-box end-to-end tests over real UDP/TCP sockets.
 - `.gitlab-ci.yml`: CI pipeline for lint, checks, tests, extended tests, release artifact build.
+- `Containerfile`: multi-stage image build for Podman.
+- `.containerignore`: trimmed container build context.
 - `PRODUCTION_READINESS.md`: go-live checklist and operational guidance.
 
 ## Requirements
@@ -53,6 +55,7 @@ Response policy:
 - Rust toolchain (stable for local dev).
 - Linux/macOS shell environment for examples below.
 - For CI parity with this repo pipeline, nightly rust is used in GitLab jobs.
+- Podman (optional, for containerized deployment).
 
 ## Build
 
@@ -100,6 +103,45 @@ Precedence is:
 - TOML file
 
 Use [`leaf.example.toml`](leaf.example.toml) as the template.
+
+## Podman (Hetzner) Quickstart
+
+Build image:
+
+```bash
+podman build -t leaf:latest -f Containerfile .
+```
+
+Run on high port (works well for rootless local validation):
+
+```bash
+podman run --rm --name leaf \
+  -e LEAF_ZONE=dev.example.com \
+  -p 5300:5300/udp \
+  -p 5300:5300/tcp \
+  leaf:latest
+```
+
+Run on public DNS port `53` (rootful Podman recommended):
+
+```bash
+sudo podman run -d --name leaf --restart=always \
+  --read-only \
+  --cap-drop=all \
+  --cap-add=NET_BIND_SERVICE \
+  -e LEAF_ZONE=dev.example.com \
+  -e LEAF_LISTEN=0.0.0.0:53 \
+  -e LEAF_CONFIG=/etc/leaf/leaf.toml \
+  -v ./leaf.toml:/etc/leaf/leaf.toml:ro \
+  -p 53:53/udp \
+  -p 53:53/tcp \
+  leaf:latest
+```
+
+Notes:
+
+- Rootless Podman usually cannot bind low ports like `53` without host tuning.
+- On Hetzner, allow inbound `53/udp` and `53/tcp` in host and cloud firewall policy.
 
 ## Configuration Reference
 
