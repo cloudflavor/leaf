@@ -75,17 +75,47 @@ fn tcp_end_to_end_authoritative_behavior() {
     assert_eq!(nodata.name_servers()[0].record_type(), RecordType::SOA);
 }
 
+#[test]
+fn multi_zone_end_to_end_authoritative_behavior() {
+    let server = start_server_with_zones(&["dev.example.com", "prod.example.com"]);
+
+    let dev_answer = query_udp(server.listen, "1-2-3-4.dev.example.com.", RecordType::A)
+        .unwrap_or_else(|error| panic!("failed udp query for dev zone A record: {error}"));
+    assert_eq!(dev_answer.response_code(), ResponseCode::NoError);
+    assert!(dev_answer.authoritative());
+    assert_eq!(dev_answer.answers().len(), 1);
+
+    let prod_answer = query_udp(server.listen, "5-6-7-8.prod.example.com.", RecordType::A)
+        .unwrap_or_else(|error| panic!("failed udp query for prod zone A record: {error}"));
+    assert_eq!(prod_answer.response_code(), ResponseCode::NoError);
+    assert!(prod_answer.authoritative());
+    assert_eq!(prod_answer.answers().len(), 1);
+
+    let refused = query_udp(server.listen, "1-2-3-4.other.example.com.", RecordType::A)
+        .unwrap_or_else(|error| panic!("failed udp query for out-of-zone check: {error}"));
+    assert_eq!(refused.response_code(), ResponseCode::Refused);
+    assert!(!refused.authoritative());
+}
+
 fn start_server(zone: &str) -> ServerProcess {
+    start_server_with_zones(&[zone])
+}
+
+fn start_server_with_zones(zones: &[&str]) -> ServerProcess {
     let listen = reserve_listen_addr();
+    let zones_value = zones.join(",");
+    let readiness_zone = zones
+        .first()
+        .unwrap_or_else(|| panic!("at least one zone is required for tests"));
     let mut child = Command::new(binary_path())
-        .env("LEAF_ZONE", zone)
+        .env("LEAF_ZONES", zones_value)
         .env("LEAF_LISTEN", listen.to_string())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .unwrap_or_else(|error| panic!("failed to start leaf binary: {error}"));
 
-    wait_until_ready(&mut child, listen, zone);
+    wait_until_ready(&mut child, listen, readiness_zone);
     ServerProcess { child, listen }
 }
 

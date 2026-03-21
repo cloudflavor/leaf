@@ -4,7 +4,7 @@ use hickory_proto::op::{Message, MessageType, OpCode, Query, ResponseCode};
 use hickory_proto::rr::rdata::{A, NS, SOA};
 use hickory_proto::rr::{Name, RData, Record, RecordType};
 
-use crate::config::{Config, SoaConfig};
+use crate::config::{Config, SoaConfig, ZoneConfig};
 
 #[derive(Debug, Clone)]
 pub struct BuiltResponse {
@@ -15,6 +15,11 @@ pub struct BuiltResponse {
 
 #[derive(Debug, Clone)]
 pub struct DnsAuthority {
+    zones: Vec<AuthorityZone>,
+}
+
+#[derive(Debug, Clone)]
+struct AuthorityZone {
     zone: Name,
     answer_ttl: u32,
     zone_ns: Name,
@@ -25,11 +30,11 @@ pub struct DnsAuthority {
 impl DnsAuthority {
     pub fn from_config(config: &Config) -> Self {
         Self {
-            zone: config.zone.clone(),
-            answer_ttl: config.answer_ttl,
-            zone_ns: config.zone_ns.clone(),
-            zone_hostmaster: config.zone_hostmaster.clone(),
-            soa: config.soa.clone(),
+            zones: config
+                .zones
+                .iter()
+                .map(AuthorityZone::from_zone_config)
+                .collect(),
         }
     }
 
@@ -63,10 +68,10 @@ impl DnsAuthority {
         }
 
         let query = request.queries().first()?;
-        if !is_name_in_zone(query.name(), &self.zone) {
+        let Some(zone) = self.find_matching_zone(query.name()) else {
             response.set_response_code(ResponseCode::Refused);
             return finalize_response(response, query_name);
-        }
+        };
 
         response.set_authoritative(true);
 
@@ -75,19 +80,38 @@ impl DnsAuthority {
             return finalize_response(response, query_name);
         }
 
-        if query.name() == &self.zone {
-            self.build_apex_response(&mut response, query);
+        if query.name() == &zone.zone {
+            zone.build_apex_response(&mut response, query);
             return finalize_response(response, query_name);
         }
 
-        if let Some(ip) = resolve_nip_style_ipv4(query.name(), &self.zone) {
-            self.build_existing_record_response(&mut response, query, ip);
+        if let Some(ip) = resolve_nip_style_ipv4(query.name(), &zone.zone) {
+            zone.build_existing_record_response(&mut response, query, ip);
             return finalize_response(response, query_name);
         }
 
         response.set_response_code(ResponseCode::NXDomain);
-        self.add_negative_authority(&mut response);
+        zone.add_negative_authority(&mut response);
         finalize_response(response, query_name)
+    }
+
+    fn find_matching_zone(&self, qname: &Name) -> Option<&AuthorityZone> {
+        self.zones
+            .iter()
+            .filter(|zone| is_name_in_zone(qname, &zone.zone))
+            .max_by_key(|zone| labels(&zone.zone).len())
+    }
+}
+
+impl AuthorityZone {
+    fn from_zone_config(zone_config: &ZoneConfig) -> Self {
+        Self {
+            zone: zone_config.zone.clone(),
+            answer_ttl: zone_config.answer_ttl,
+            zone_ns: zone_config.zone_ns.clone(),
+            zone_hostmaster: zone_config.zone_hostmaster.clone(),
+            soa: zone_config.soa.clone(),
+        }
     }
 
     fn build_apex_response(&self, response: &mut Message, query: &Query) {
@@ -235,17 +259,52 @@ mod tests {
 
     fn authority() -> DnsAuthority {
         DnsAuthority {
-            zone: name("dev.example.com."),
-            answer_ttl: 60,
-            zone_ns: name("ns1.dev.example.com."),
-            zone_hostmaster: name("hostmaster.dev.example.com."),
-            soa: SoaConfig {
-                serial: 1,
-                refresh: 300,
-                retry: 60,
-                expire: 86400,
-                minimum: 60,
-            },
+            zones: vec![AuthorityZone {
+                zone: name("dev.example.com."),
+                answer_ttl: 60,
+                zone_ns: name("ns1.dev.example.com."),
+                zone_hostmaster: name("hostmaster.dev.example.com."),
+                soa: SoaConfig {
+                    serial: 1,
+                    refresh: 300,
+                    retry: 60,
+                    expire: 86400,
+                    minimum: 60,
+                },
+            }],
+        }
+    }
+
+    fn multi_zone_authority() -> DnsAuthority {
+        DnsAuthority {
+            zones: vec![
+                AuthorityZone {
+                    zone: name("dev.example.com."),
+                    answer_ttl: 60,
+                    zone_ns: name("ns1.dev.example.com."),
+                    zone_hostmaster: name("hostmaster.dev.example.com."),
+                    soa: SoaConfig {
+                        serial: 1,
+                        refresh: 300,
+                        retry: 60,
+                        expire: 86400,
+                        minimum: 60,
+                    },
+                },
+                AuthorityZone {
+                    zone: name("example.com."),
+                    answer_ttl: 120,
+                    zone_ns: name("ns1.example.com."),
+                    zone_hostmaster: name("hostmaster.example.com."),
+                    soa: SoaConfig {
+                        serial: 2,
+                        refresh: 600,
+                        retry: 120,
+                        expire: 172800,
+                        minimum: 120,
+                    },
+                },
+            ],
         }
     }
 
@@ -424,5 +483,19 @@ mod tests {
         assert_eq!(response.answers().len(), 1);
         assert_eq!(response.answers()[0].record_type(), RecordType::A);
         assert!(response.authoritative());
+    }
+
+    #[test]
+    fn chooses_most_specific_zone_for_overlapping_suffixes() {
+        let response_bytes = multi_zone_authority()
+            .build_response(&query_packet("dev.example.com.", RecordType::SOA))
+            .unwrap_or_else(|| panic!("expected response"))
+            .wire_bytes;
+        let response = decode_message(&response_bytes);
+        assert_eq!(response.response_code(), ResponseCode::NoError);
+        assert_eq!(response.answers().len(), 1);
+
+        let apex_name = response.answers()[0].name().to_utf8().to_ascii_lowercase();
+        assert_eq!(apex_name, "dev.example.com.");
     }
 }

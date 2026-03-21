@@ -53,13 +53,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let udp_socket = UdpSocket::bind(config.listen).await?;
     let tcp_listener = TcpListener::bind(config.listen).await?;
 
+    let zones = config
+        .zones
+        .iter()
+        .map(|zone| zone.zone.to_utf8())
+        .collect::<Vec<_>>()
+        .join(",");
+
     eprintln!(
-        "event=startup message='authoritative dns online' listen={} zone={} zone_ns={} hostmaster={} ttl={} global_qps_limit={} per_ip_qps_limit={} per_ip_invalid_qname_qps_limit={} invalid_qname_limiter_max_tracked_keys={} tcp_max_connections={} tcp_max_connections_per_ip={} max_udp_request_bytes={} max_tcp_frame_bytes={}",
+        "event=startup message='authoritative dns online' listen={} zones={} global_qps_limit={} per_ip_qps_limit={} per_ip_invalid_qname_qps_limit={} invalid_qname_limiter_max_tracked_keys={} tcp_max_connections={} tcp_max_connections_per_ip={} max_udp_request_bytes={} max_tcp_frame_bytes={}",
         config.listen,
-        config.zone.to_utf8(),
-        config.zone_ns.to_utf8(),
-        config.zone_hostmaster.to_utf8(),
-        config.answer_ttl,
+        zones,
         config.limits.global_qps_limit,
         config.limits.per_ip_qps_limit,
         config.limits.per_ip_invalid_qname_qps_limit,
