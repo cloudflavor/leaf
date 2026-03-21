@@ -5,5 +5,7 @@ edition = "2024"
 
 [dependencies]
 hickory-proto = "0.25"
+serde = { version = "1", features = ["derive"] }
 structopt = "0.3"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }
+toml = "0.9"

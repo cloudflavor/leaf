@@ -1,0 +1,31 @@
+# Copy to leaf.toml (or pass --config /path/to/file.toml)
+# Precedence is: CLI flags > environment variables > TOML file.
+
+zone = "dev.example.com"
+listen = "0.0.0.0:5300"
+ttl = 60
+
+# Optional; defaults to ns1.<zone> and hostmaster.<zone> when omitted.
+zone_ns = "ns1.dev.example.com"
+zone_hostmaster = "hostmaster.dev.example.com"
+
+soa_serial = 1
+soa_refresh = 300
+soa_retry = 60
+soa_expire = 86400
+soa_minimum = 60
+
+global_qps_limit = 5000
+per_ip_qps_limit = 200
+per_ip_invalid_qname_qps_limit = 20
+limiter_max_tracked_ips = 10000
+invalid_qname_limiter_max_tracked_keys = 50000
+
+tcp_max_connections = 1024
+tcp_max_connections_per_ip = 64
+tcp_idle_timeout_ms = 10000
+tcp_read_timeout_ms = 3000
+tcp_write_timeout_ms = 3000
+
+max_tcp_frame_bytes = 4096
+max_udp_request_bytes = 1232
