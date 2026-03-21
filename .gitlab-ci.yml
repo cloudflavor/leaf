@@ -1,0 +1,68 @@
+stages:
+  - lint
+  - test
+  - release
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
+    - when: always
+
+default:
+  image: rust:nightly
+  variables:
+    CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
+    CARGO_TERM_COLOR: always
+  cache:
+    key: "$CI_COMMIT_REF_SLUG"
+    paths:
+      - .cargo/bin
+      - .cargo/registry/index
+      - .cargo/registry/cache
+      - .cargo/git/db
+      - target
+  before_script:
+    - rustc --version
+    - cargo --version
+    - rustup component add rustfmt clippy
+
+cargo_fmt:
+  stage: lint
+  script:
+    - cargo fmt --all -- --check
+
+cargo_check:
+  stage: lint
+  script:
+    - cargo check --all-targets --all-features --locked
+
+cargo_clippy:
+  stage: lint
+  script:
+    - cargo clippy --all-targets --all-features --locked -- -D warnings
+
+cargo_test:
+  stage: test
+  script:
+    - cargo test --locked
+
+cargo_test_extended:
+  stage: test
+  script:
+    - cargo test --all-targets --all-features --release --locked
+
+release:
+  stage: release
+  script:
+    - cargo build --release --locked
+    - mkdir -p dist
+    - cp target/release/leaf dist/leaf
+  artifacts:
+    name: "leaf-${CI_COMMIT_TAG}"
+    paths:
+      - dist/leaf
+    expire_in: 30 days
+  rules:
+    - if: $CI_COMMIT_TAG
