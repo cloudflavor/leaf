@@ -1,0 +1,399 @@
+use std::net::Ipv4Addr;
+
+use hickory_proto::op::{Message, MessageType, OpCode, Query, ResponseCode};
+use hickory_proto::rr::rdata::{A, NS, SOA};
+use hickory_proto::rr::{Name, RData, Record, RecordType};
+
+use crate::config::{Config, SoaConfig};
+
+#[derive(Debug, Clone)]
+pub struct DnsAuthority {
+    zone: Name,
+    answer_ttl: u32,
+    zone_ns: Name,
+    zone_hostmaster: Name,
+    soa: SoaConfig,
+}
+
+impl DnsAuthority {
+    pub fn from_config(config: &Config) -> Self {
+        Self {
+            zone: config.zone.clone(),
+            answer_ttl: config.answer_ttl,
+            zone_ns: config.zone_ns.clone(),
+            zone_hostmaster: config.zone_hostmaster.clone(),
+            soa: config.soa.clone(),
+        }
+    }
+
+    pub fn build_response(&self, request_bytes: &[u8]) -> Option<Vec<u8>> {
+        let request = Message::from_vec(request_bytes).ok()?;
+
+        let mut response = Message::new();
+        response.set_id(request.id());
+        response.set_op_code(request.op_code());
+        response.set_message_type(MessageType::Response);
+        response.set_authoritative(false);
+        response.set_recursion_desired(request.recursion_desired());
+        response.set_recursion_available(false);
+
+        for query in request.queries() {
+            response.add_query(query.clone());
+        }
+
+        if request.op_code() != OpCode::Query {
+            response.set_response_code(ResponseCode::NotImp);
+            return response.to_vec().ok();
+        }
+
+        if request.queries().len() != 1 {
+            response.set_response_code(ResponseCode::FormErr);
+            return response.to_vec().ok();
+        }
+
+        let query = request.queries().first()?;
+        if !is_name_in_zone(query.name(), &self.zone) {
+            response.set_response_code(ResponseCode::Refused);
+            return response.to_vec().ok();
+        }
+
+        response.set_authoritative(true);
+
+        if query.query_type() == RecordType::ANY {
+            response.set_response_code(ResponseCode::Refused);
+            return response.to_vec().ok();
+        }
+
+        if query.name() == &self.zone {
+            self.build_apex_response(&mut response, query);
+            return response.to_vec().ok();
+        }
+
+        if let Some(ip) = resolve_nip_style_ipv4(query.name(), &self.zone) {
+            self.build_existing_record_response(&mut response, query, ip);
+            return response.to_vec().ok();
+        }
+
+        response.set_response_code(ResponseCode::NXDomain);
+        self.add_negative_authority(&mut response);
+        response.to_vec().ok()
+    }
+
+    fn build_apex_response(&self, response: &mut Message, query: &Query) {
+        match query.query_type() {
+            RecordType::SOA => {
+                response.add_answer(self.soa_record(self.answer_ttl));
+                response.set_response_code(ResponseCode::NoError);
+            }
+            RecordType::NS => {
+                response.add_answer(self.ns_record(self.answer_ttl));
+                response.set_response_code(ResponseCode::NoError);
+            }
+            _ => {
+                response.set_response_code(ResponseCode::NoError);
+                self.add_negative_authority(response);
+            }
+        }
+    }
+
+    fn build_existing_record_response(&self, response: &mut Message, query: &Query, ip: Ipv4Addr) {
+        match query.query_type() {
+            RecordType::A => {
+                let [a, b, c, d] = ip.octets();
+                response.add_answer(Record::from_rdata(
+                    query.name().clone(),
+                    self.answer_ttl,
+                    RData::A(A::new(a, b, c, d)),
+                ));
+                response.set_response_code(ResponseCode::NoError);
+            }
+            _ => {
+                response.set_response_code(ResponseCode::NoError);
+                self.add_negative_authority(response);
+            }
+        }
+    }
+
+    fn add_negative_authority(&self, response: &mut Message) {
+        response.add_name_server(self.soa_record(self.soa.minimum));
+    }
+
+    fn soa_record(&self, ttl: u32) -> Record {
+        Record::from_rdata(
+            self.zone.clone(),
+            ttl,
+            RData::SOA(SOA::new(
+                self.zone_ns.clone(),
+                self.zone_hostmaster.clone(),
+                self.soa.serial,
+                self.soa.refresh,
+                self.soa.retry,
+                self.soa.expire,
+                self.soa.minimum,
+            )),
+        )
+    }
+
+    fn ns_record(&self, ttl: u32) -> Record {
+        Record::from_rdata(self.zone.clone(), ttl, RData::NS(NS(self.zone_ns.clone())))
+    }
+}
+
+fn is_name_in_zone(name: &Name, zone: &Name) -> bool {
+    let name_labels = labels(name);
+    let zone_labels = labels(zone);
+
+    name_labels.len() >= zone_labels.len() && name_labels.ends_with(&zone_labels)
+}
+
+fn resolve_nip_style_ipv4(name: &Name, zone: &Name) -> Option<Ipv4Addr> {
+    let name_labels = labels(name);
+    let zone_labels = labels(zone);
+
+    if name_labels.len() <= zone_labels.len() || !name_labels.ends_with(&zone_labels) {
+        return None;
+    }
+
+    let prefix = &name_labels[..name_labels.len() - zone_labels.len()];
+
+    // nip.io-like style: 1-2-3-4.example.com
+    if let Some(last) = prefix.last()
+        && let Some(ip) = parse_dashed_ipv4(last)
+    {
+        return Some(ip);
+    }
+
+    // nip.io-like style: 1.2.3.4.example.com
+    if prefix.len() >= 4 {
+        let dotted = prefix[prefix.len() - 4..].join(".");
+        if let Some(ip) = parse_dotted_ipv4(&dotted) {
+            return Some(ip);
+        }
+    }
+
+    None
+}
+
+fn parse_dashed_ipv4(label: &str) -> Option<Ipv4Addr> {
+    parse_dotted_ipv4(&label.replace('-', "."))
+}
+
+fn parse_dotted_ipv4(input: &str) -> Option<Ipv4Addr> {
+    let mut octets = [0_u8; 4];
+    let mut parts = input.split('.');
+
+    for octet in &mut octets {
+        let part = parts.next()?;
+        *octet = part.parse::<u8>().ok()?;
+    }
+
+    if parts.next().is_some() {
+        return None;
+    }
+
+    Some(Ipv4Addr::from(octets))
+}
+
+fn labels(name: &Name) -> Vec<String> {
+    name.to_utf8()
+        .trim_end_matches('.')
+        .split('.')
+        .filter(|label| !label.is_empty())
+        .map(|label| label.to_ascii_lowercase())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hickory_proto::op::Query;
+
+    fn name(value: &str) -> Name {
+        Name::from_ascii(value).unwrap_or_else(|err| panic!("invalid test name {value}: {err}"))
+    }
+
+    fn authority() -> DnsAuthority {
+        DnsAuthority {
+            zone: name("dev.example.com."),
+            answer_ttl: 60,
+            zone_ns: name("ns1.dev.example.com."),
+            zone_hostmaster: name("hostmaster.dev.example.com."),
+            soa: SoaConfig {
+                serial: 1,
+                refresh: 300,
+                retry: 60,
+                expire: 86400,
+                minimum: 60,
+            },
+        }
+    }
+
+    fn query_packet(qname: &str, qtype: RecordType) -> Vec<u8> {
+        let mut request = Message::new();
+        request.set_id(12);
+        request.set_op_code(OpCode::Query);
+        request.add_query(Query::query(name(qname), qtype));
+        request
+            .to_vec()
+            .unwrap_or_else(|err| panic!("failed to serialize request: {err}"))
+    }
+
+    fn decode_message(bytes: &[u8]) -> Message {
+        Message::from_vec(bytes).unwrap_or_else(|err| panic!("failed to decode response: {err}"))
+    }
+
+    #[test]
+    fn resolves_dashed_style() {
+        let zone = name("dev.example.com.");
+        let query = name("1-2-3-4.dev.example.com.");
+        assert_eq!(
+            resolve_nip_style_ipv4(&query, &zone),
+            Some(Ipv4Addr::new(1, 2, 3, 4))
+        );
+    }
+
+    #[test]
+    fn resolves_dotted_style() {
+        let zone = name("dev.example.com.");
+        let query = name("1.2.3.4.dev.example.com.");
+        assert_eq!(
+            resolve_nip_style_ipv4(&query, &zone),
+            Some(Ipv4Addr::new(1, 2, 3, 4))
+        );
+    }
+
+    #[test]
+    fn resolves_with_leading_subdomain() {
+        let zone = name("dev.example.com.");
+        let query = name("api.10-11-12-13.dev.example.com.");
+        assert_eq!(
+            resolve_nip_style_ipv4(&query, &zone),
+            Some(Ipv4Addr::new(10, 11, 12, 13))
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_octet() {
+        let zone = name("dev.example.com.");
+        let query = name("300-2-3-4.dev.example.com.");
+        assert_eq!(resolve_nip_style_ipv4(&query, &zone), None);
+    }
+
+    #[test]
+    fn rejects_outside_zone() {
+        let zone = name("dev.example.com.");
+        let query = name("1-2-3-4.prod.example.com.");
+        assert_eq!(resolve_nip_style_ipv4(&query, &zone), None);
+        assert!(!is_name_in_zone(&query, &zone));
+    }
+
+    #[test]
+    fn returns_formerr_for_multi_question_requests() {
+        let mut request = Message::new();
+        request.set_id(11);
+        request.set_op_code(OpCode::Query);
+        request.add_query(Query::query(
+            name("1-2-3-4.dev.example.com."),
+            RecordType::A,
+        ));
+        request.add_query(Query::query(
+            name("2-3-4-5.dev.example.com."),
+            RecordType::A,
+        ));
+
+        let request_bytes = request
+            .to_vec()
+            .unwrap_or_else(|err| panic!("failed to serialize request: {err}"));
+        let response_bytes = authority()
+            .build_response(&request_bytes)
+            .unwrap_or_else(|| panic!("expected response"));
+        let response = decode_message(&response_bytes);
+
+        assert_eq!(response.response_code(), ResponseCode::FormErr);
+    }
+
+    #[test]
+    fn returns_refused_for_out_of_zone_names() {
+        let response_bytes = authority()
+            .build_response(&query_packet("1-2-3-4.prod.example.com.", RecordType::A))
+            .unwrap_or_else(|| panic!("expected response"));
+        let response = decode_message(&response_bytes);
+
+        assert_eq!(response.response_code(), ResponseCode::Refused);
+        assert!(!response.authoritative());
+    }
+
+    #[test]
+    fn returns_apex_soa_record() {
+        let response_bytes = authority()
+            .build_response(&query_packet("dev.example.com.", RecordType::SOA))
+            .unwrap_or_else(|| panic!("expected response"));
+        let response = decode_message(&response_bytes);
+
+        assert_eq!(response.response_code(), ResponseCode::NoError);
+        assert_eq!(response.answers().len(), 1);
+        assert_eq!(response.answers()[0].record_type(), RecordType::SOA);
+    }
+
+    #[test]
+    fn returns_apex_ns_record() {
+        let response_bytes = authority()
+            .build_response(&query_packet("dev.example.com.", RecordType::NS))
+            .unwrap_or_else(|| panic!("expected response"));
+        let response = decode_message(&response_bytes);
+
+        assert_eq!(response.response_code(), ResponseCode::NoError);
+        assert_eq!(response.answers().len(), 1);
+        assert_eq!(response.answers()[0].record_type(), RecordType::NS);
+    }
+
+    #[test]
+    fn returns_refused_for_any_queries() {
+        let response_bytes = authority()
+            .build_response(&query_packet("1-2-3-4.dev.example.com.", RecordType::ANY))
+            .unwrap_or_else(|| panic!("expected response"));
+        let response = decode_message(&response_bytes);
+
+        assert_eq!(response.response_code(), ResponseCode::Refused);
+        assert!(response.authoritative());
+    }
+
+    #[test]
+    fn returns_nodata_with_soa_authority() {
+        let response_bytes = authority()
+            .build_response(&query_packet("1-2-3-4.dev.example.com.", RecordType::AAAA))
+            .unwrap_or_else(|| panic!("expected response"));
+        let response = decode_message(&response_bytes);
+
+        assert_eq!(response.response_code(), ResponseCode::NoError);
+        assert!(response.answers().is_empty());
+        assert_eq!(response.name_servers().len(), 1);
+        assert_eq!(response.name_servers()[0].record_type(), RecordType::SOA);
+    }
+
+    #[test]
+    fn returns_nxdomain_with_soa_authority() {
+        let response_bytes = authority()
+            .build_response(&query_packet("nope.dev.example.com.", RecordType::A))
+            .unwrap_or_else(|| panic!("expected response"));
+        let response = decode_message(&response_bytes);
+
+        assert_eq!(response.response_code(), ResponseCode::NXDomain);
+        assert!(response.answers().is_empty());
+        assert_eq!(response.name_servers().len(), 1);
+        assert_eq!(response.name_servers()[0].record_type(), RecordType::SOA);
+    }
+
+    #[test]
+    fn returns_a_record_for_existing_encoded_name() {
+        let response_bytes = authority()
+            .build_response(&query_packet("1-2-3-4.dev.example.com.", RecordType::A))
+            .unwrap_or_else(|| panic!("expected response"));
+        let response = decode_message(&response_bytes);
+
+        assert_eq!(response.response_code(), ResponseCode::NoError);
+        assert_eq!(response.answers().len(), 1);
+        assert_eq!(response.answers()[0].record_type(), RecordType::A);
+        assert!(response.authoritative());
+    }
+}
