@@ -7,6 +7,13 @@ use hickory_proto::rr::{Name, RData, Record, RecordType};
 use crate::config::{Config, SoaConfig};
 
 #[derive(Debug, Clone)]
+pub struct BuiltResponse {
+    pub wire_bytes: Vec<u8>,
+    pub response_code: ResponseCode,
+    pub query_name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct DnsAuthority {
     zone: Name,
     answer_ttl: u32,
@@ -26,8 +33,12 @@ impl DnsAuthority {
         }
     }
 
-    pub fn build_response(&self, request_bytes: &[u8]) -> Option<Vec<u8>> {
+    pub fn build_response(&self, request_bytes: &[u8]) -> Option<BuiltResponse> {
         let request = Message::from_vec(request_bytes).ok()?;
+        let query_name = request
+            .queries()
+            .first()
+            .map(|query| query.name().to_utf8().to_ascii_lowercase());
 
         let mut response = Message::new();
         response.set_id(request.id());
@@ -43,40 +54,40 @@ impl DnsAuthority {
 
         if request.op_code() != OpCode::Query {
             response.set_response_code(ResponseCode::NotImp);
-            return response.to_vec().ok();
+            return finalize_response(response, query_name);
         }
 
         if request.queries().len() != 1 {
             response.set_response_code(ResponseCode::FormErr);
-            return response.to_vec().ok();
+            return finalize_response(response, query_name);
         }
 
         let query = request.queries().first()?;
         if !is_name_in_zone(query.name(), &self.zone) {
             response.set_response_code(ResponseCode::Refused);
-            return response.to_vec().ok();
+            return finalize_response(response, query_name);
         }
 
         response.set_authoritative(true);
 
         if query.query_type() == RecordType::ANY {
             response.set_response_code(ResponseCode::Refused);
-            return response.to_vec().ok();
+            return finalize_response(response, query_name);
         }
 
         if query.name() == &self.zone {
             self.build_apex_response(&mut response, query);
-            return response.to_vec().ok();
+            return finalize_response(response, query_name);
         }
 
         if let Some(ip) = resolve_nip_style_ipv4(query.name(), &self.zone) {
             self.build_existing_record_response(&mut response, query, ip);
-            return response.to_vec().ok();
+            return finalize_response(response, query_name);
         }
 
         response.set_response_code(ResponseCode::NXDomain);
         self.add_negative_authority(&mut response);
-        response.to_vec().ok()
+        finalize_response(response, query_name)
     }
 
     fn build_apex_response(&self, response: &mut Message, query: &Query) {
@@ -137,6 +148,16 @@ impl DnsAuthority {
     fn ns_record(&self, ttl: u32) -> Record {
         Record::from_rdata(self.zone.clone(), ttl, RData::NS(NS(self.zone_ns.clone())))
     }
+}
+
+fn finalize_response(response: Message, query_name: Option<String>) -> Option<BuiltResponse> {
+    let response_code = response.response_code();
+    let wire_bytes = response.to_vec().ok()?;
+    Some(BuiltResponse {
+        wire_bytes,
+        response_code,
+        query_name,
+    })
 }
 
 fn is_name_in_zone(name: &Name, zone: &Name) -> bool {
@@ -306,7 +327,8 @@ mod tests {
             .unwrap_or_else(|err| panic!("failed to serialize request: {err}"));
         let response_bytes = authority()
             .build_response(&request_bytes)
-            .unwrap_or_else(|| panic!("expected response"));
+            .unwrap_or_else(|| panic!("expected response"))
+            .wire_bytes;
         let response = decode_message(&response_bytes);
 
         assert_eq!(response.response_code(), ResponseCode::FormErr);
@@ -316,7 +338,8 @@ mod tests {
     fn returns_refused_for_out_of_zone_names() {
         let response_bytes = authority()
             .build_response(&query_packet("1-2-3-4.prod.example.com.", RecordType::A))
-            .unwrap_or_else(|| panic!("expected response"));
+            .unwrap_or_else(|| panic!("expected response"))
+            .wire_bytes;
         let response = decode_message(&response_bytes);
 
         assert_eq!(response.response_code(), ResponseCode::Refused);
@@ -327,7 +350,8 @@ mod tests {
     fn returns_apex_soa_record() {
         let response_bytes = authority()
             .build_response(&query_packet("dev.example.com.", RecordType::SOA))
-            .unwrap_or_else(|| panic!("expected response"));
+            .unwrap_or_else(|| panic!("expected response"))
+            .wire_bytes;
         let response = decode_message(&response_bytes);
 
         assert_eq!(response.response_code(), ResponseCode::NoError);
@@ -339,7 +363,8 @@ mod tests {
     fn returns_apex_ns_record() {
         let response_bytes = authority()
             .build_response(&query_packet("dev.example.com.", RecordType::NS))
-            .unwrap_or_else(|| panic!("expected response"));
+            .unwrap_or_else(|| panic!("expected response"))
+            .wire_bytes;
         let response = decode_message(&response_bytes);
 
         assert_eq!(response.response_code(), ResponseCode::NoError);
@@ -351,7 +376,8 @@ mod tests {
     fn returns_refused_for_any_queries() {
         let response_bytes = authority()
             .build_response(&query_packet("1-2-3-4.dev.example.com.", RecordType::ANY))
-            .unwrap_or_else(|| panic!("expected response"));
+            .unwrap_or_else(|| panic!("expected response"))
+            .wire_bytes;
         let response = decode_message(&response_bytes);
 
         assert_eq!(response.response_code(), ResponseCode::Refused);
@@ -362,7 +388,8 @@ mod tests {
     fn returns_nodata_with_soa_authority() {
         let response_bytes = authority()
             .build_response(&query_packet("1-2-3-4.dev.example.com.", RecordType::AAAA))
-            .unwrap_or_else(|| panic!("expected response"));
+            .unwrap_or_else(|| panic!("expected response"))
+            .wire_bytes;
         let response = decode_message(&response_bytes);
 
         assert_eq!(response.response_code(), ResponseCode::NoError);
@@ -375,7 +402,8 @@ mod tests {
     fn returns_nxdomain_with_soa_authority() {
         let response_bytes = authority()
             .build_response(&query_packet("nope.dev.example.com.", RecordType::A))
-            .unwrap_or_else(|| panic!("expected response"));
+            .unwrap_or_else(|| panic!("expected response"))
+            .wire_bytes;
         let response = decode_message(&response_bytes);
 
         assert_eq!(response.response_code(), ResponseCode::NXDomain);
@@ -388,7 +416,8 @@ mod tests {
     fn returns_a_record_for_existing_encoded_name() {
         let response_bytes = authority()
             .build_response(&query_packet("1-2-3-4.dev.example.com.", RecordType::A))
-            .unwrap_or_else(|| panic!("expected response"));
+            .unwrap_or_else(|| panic!("expected response"))
+            .wire_bytes;
         let response = decode_message(&response_bytes);
 
         assert_eq!(response.response_code(), ResponseCode::NoError);

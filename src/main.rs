@@ -8,18 +8,22 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use hickory_proto::op::ResponseCode;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::time::timeout;
 
 use crate::config::{Config, LimitsConfig};
-use crate::dns::DnsAuthority;
-use crate::limits::{QueryRateLimiter, TcpConnectionLimiter, TcpConnectionPermit};
+use crate::dns::{BuiltResponse, DnsAuthority};
+use crate::limits::{
+    InvalidQueryRateLimiter, QueryRateLimiter, TcpConnectionLimiter, TcpConnectionPermit,
+};
 
 #[derive(Debug, Clone)]
 struct RuntimeState {
     authority: Arc<DnsAuthority>,
     query_rate_limiter: QueryRateLimiter,
+    invalid_query_rate_limiter: InvalidQueryRateLimiter,
     limits: LimitsConfig,
 }
 
@@ -34,6 +38,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
             config.limits.per_ip_qps_limit,
             config.limits.limiter_max_tracked_ips,
         ),
+        invalid_query_rate_limiter: InvalidQueryRateLimiter::new(
+            config.limits.per_ip_invalid_qname_qps_limit,
+            config.limits.invalid_qname_limiter_max_tracked_keys,
+        ),
         limits: config.limits.clone(),
     };
 
@@ -46,7 +54,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let tcp_listener = TcpListener::bind(config.listen).await?;
 
     eprintln!(
-        "event=startup message='authoritative dns online' listen={} zone={} zone_ns={} hostmaster={} ttl={} global_qps_limit={} per_ip_qps_limit={} tcp_max_connections={} tcp_max_connections_per_ip={} max_udp_request_bytes={} max_tcp_frame_bytes={}",
+        "event=startup message='authoritative dns online' listen={} zone={} zone_ns={} hostmaster={} ttl={} global_qps_limit={} per_ip_qps_limit={} per_ip_invalid_qname_qps_limit={} invalid_qname_limiter_max_tracked_keys={} tcp_max_connections={} tcp_max_connections_per_ip={} max_udp_request_bytes={} max_tcp_frame_bytes={}",
         config.listen,
         config.zone.to_utf8(),
         config.zone_ns.to_utf8(),
@@ -54,6 +62,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.answer_ttl,
         config.limits.global_qps_limit,
         config.limits.per_ip_qps_limit,
+        config.limits.per_ip_invalid_qname_qps_limit,
+        config.limits.invalid_qname_limiter_max_tracked_keys,
         config.limits.tcp_max_connections,
         config.limits.tcp_max_connections_per_ip,
         config.limits.max_udp_request_bytes,
@@ -88,8 +98,17 @@ async fn run_udp(socket: UdpSocket, runtime: RuntimeState) -> io::Result<()> {
         }
 
         if let Some(response) = runtime.authority.build_response(&buffer[..received]) {
+            if !allow_invalid_query_response(&runtime, peer.ip(), &response) {
+                let qname = response.query_name.as_deref().unwrap_or("-");
+                eprintln!(
+                    "event=udp_drop reason=invalid_query_rate_limited peer={} qname={} rcode={:?}",
+                    peer, qname, response.response_code
+                );
+                continue;
+            }
+
             // Best effort; malformed peers should not terminate the server.
-            let _ = socket.send_to(&response, peer).await;
+            let _ = socket.send_to(&response.wire_bytes, peer).await;
         } else {
             eprintln!("event=udp_drop reason=parse_error peer={}", peer);
         }
@@ -176,7 +195,16 @@ async fn handle_tcp_connection(
             return Ok(());
         };
 
-        let response_len = u16::try_from(response.len()).map_err(|_| {
+        if !allow_invalid_query_response(&runtime, peer.ip(), &response) {
+            let qname = response.query_name.as_deref().unwrap_or("-");
+            eprintln!(
+                "event=tcp_drop reason=invalid_query_rate_limited peer={} qname={} rcode={:?}",
+                peer, qname, response.response_code
+            );
+            return Ok(());
+        }
+
+        let response_len = u16::try_from(response.wire_bytes.len()).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 "dns response too large for tcp framing",
@@ -190,7 +218,12 @@ async fn handle_tcp_connection(
         )
         .await?;
 
-        write_all_with_timeout(&mut stream, &response, runtime.limits.tcp_write_timeout).await?;
+        write_all_with_timeout(
+            &mut stream,
+            &response.wire_bytes,
+            runtime.limits.tcp_write_timeout,
+        )
+        .await?;
     }
 }
 
@@ -229,5 +262,28 @@ fn is_disconnect_error(error: &io::Error) -> bool {
             | io::ErrorKind::ConnectionReset
             | io::ErrorKind::BrokenPipe
             | io::ErrorKind::TimedOut
+    )
+}
+
+fn allow_invalid_query_response(
+    runtime: &RuntimeState,
+    ip: std::net::IpAddr,
+    response: &BuiltResponse,
+) -> bool {
+    if !is_invalid_query_response_code(response.response_code) {
+        return true;
+    }
+
+    let Some(query_name) = response.query_name.as_deref() else {
+        return true;
+    };
+
+    runtime.invalid_query_rate_limiter.allow(ip, query_name)
+}
+
+fn is_invalid_query_response_code(response_code: ResponseCode) -> bool {
+    matches!(
+        response_code,
+        ResponseCode::NXDomain | ResponseCode::Refused | ResponseCode::FormErr
     )
 }

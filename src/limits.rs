@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -17,6 +17,27 @@ struct QueryRateState {
     started_at: Instant,
     global_count: u32,
     per_ip_count: HashMap<IpAddr, u32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct InvalidQueryRateLimiter {
+    max_per_key_per_window: u32,
+    max_tracked_keys: usize,
+    window: Duration,
+    state: Arc<Mutex<InvalidQueryRateState>>,
+}
+
+#[derive(Debug)]
+struct InvalidQueryRateState {
+    started_at: Instant,
+    per_key_count: HashMap<InvalidQueryKey, u32>,
+    key_order: VecDeque<InvalidQueryKey>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct InvalidQueryKey {
+    ip: IpAddr,
+    qname: String,
 }
 
 impl QueryRateLimiter {
@@ -67,6 +88,63 @@ impl QueryRateLimiter {
         *per_ip_counter += 1;
         state.global_count += 1;
 
+        true
+    }
+}
+
+impl InvalidQueryRateLimiter {
+    pub fn new(max_per_key_per_second: u32, max_tracked_keys: usize) -> Self {
+        Self {
+            max_per_key_per_window: max_per_key_per_second,
+            max_tracked_keys,
+            window: Duration::from_secs(1),
+            state: Arc::new(Mutex::new(InvalidQueryRateState {
+                started_at: Instant::now(),
+                per_key_count: HashMap::new(),
+                key_order: VecDeque::new(),
+            })),
+        }
+    }
+
+    pub fn allow(&self, ip: IpAddr, qname: &str) -> bool {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        if state.started_at.elapsed() >= self.window {
+            state.started_at = Instant::now();
+            state.per_key_count.clear();
+            state.key_order.clear();
+        }
+
+        let key = InvalidQueryKey {
+            ip,
+            qname: qname.to_ascii_lowercase(),
+        };
+
+        if let Some(per_key_count) = state.per_key_count.get_mut(&key) {
+            if *per_key_count >= self.max_per_key_per_window {
+                return false;
+            }
+
+            *per_key_count += 1;
+            return true;
+        }
+
+        while state.per_key_count.len() >= self.max_tracked_keys {
+            let Some(oldest_key) = state.key_order.pop_front() else {
+                break;
+            };
+            state.per_key_count.remove(&oldest_key);
+        }
+
+        if state.per_key_count.len() >= self.max_tracked_keys {
+            return false;
+        }
+
+        state.key_order.push_back(key.clone());
+        state.per_key_count.insert(key, 1);
         true
     }
 }
@@ -191,6 +269,38 @@ mod tests {
         assert!(limiter.allow(ip(1)));
         assert!(limiter.allow(ip(2)));
         assert!(!limiter.allow(ip(3)));
+    }
+
+    #[test]
+    fn invalid_query_limiter_enforces_per_key_limit() {
+        let limiter = InvalidQueryRateLimiter::new(2, 32);
+
+        assert!(limiter.allow(ip(1), "nope.dev.example.com."));
+        assert!(limiter.allow(ip(1), "nope.dev.example.com."));
+        assert!(!limiter.allow(ip(1), "nope.dev.example.com."));
+    }
+
+    #[test]
+    fn invalid_query_limiter_tracks_per_ip_and_name() {
+        let limiter = InvalidQueryRateLimiter::new(1, 32);
+
+        assert!(limiter.allow(ip(1), "nope.dev.example.com."));
+        assert!(limiter.allow(ip(2), "nope.dev.example.com."));
+        assert!(limiter.allow(ip(1), "other.dev.example.com."));
+        assert!(!limiter.allow(ip(1), "nope.dev.example.com."));
+    }
+
+    #[test]
+    fn invalid_query_limiter_bounds_tracked_keys() {
+        let limiter = InvalidQueryRateLimiter::new(1, 2);
+
+        assert!(limiter.allow(ip(1), "a.dev.example.com."));
+        assert!(limiter.allow(ip(1), "b.dev.example.com."));
+        assert!(!limiter.allow(ip(1), "a.dev.example.com."));
+
+        // Inserting a third distinct key evicts the oldest tracked key.
+        assert!(limiter.allow(ip(1), "c.dev.example.com."));
+        assert!(limiter.allow(ip(1), "a.dev.example.com."));
     }
 
     #[test]
