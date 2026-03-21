@@ -41,5 +41,5 @@ max_tcp_frame_bytes = 4096
 max_udp_request_bytes = 1232
 
 [logging]
-# Set true to log each successful UDP/TCP answer.
+# Set true to log each successful UDP/TCP answer (without client IP or qname).
 query_log_enabled = false

@@ -32,7 +32,7 @@ The server now includes the following protections and protocol behavior:
 - UDP hardening:
   - max datagram request size bound
 - Structured operational logs for startup and drop reasons (`rate_limited`, `invalid_query_rate_limited`, `request_too_large`, `parse_error`, `connection_limit_reached`).
-- Optional per-query success logs (`udp_query`, `tcp_query`) controlled by config.
+- Optional per-query success logs (`udp_query`, `tcp_query`) controlled by config and minimized to avoid client identifiers.
 
 ## Runtime Configuration
 

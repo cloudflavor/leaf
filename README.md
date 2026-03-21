@@ -161,7 +161,7 @@ Notes:
 
 - Top-level flat keys are still accepted for backward compatibility.
 - If `dns.zone_ns`/`dns.zone_hostmaster` are omitted, defaults are derived per zone (`ns1.<zone>`, `hostmaster.<zone>`).
-- Set `[logging].query_log_enabled = true` (or `LEAF_LOG_QUERIES=true`) to emit one structured log line per answered DNS query (`event=udp_query` / `event=tcp_query`).
+- Set `[logging].query_log_enabled = true` (or `LEAF_LOG_QUERIES=true`) to emit one structured log line per answered DNS query (`event=udp_query` / `event=tcp_query`) without client IP or full qname.
 
 ## Podman (Hetzner) Quickstart
 
@@ -233,7 +233,7 @@ For TOML, you can use either flat top-level keys (legacy) or the structured layo
 | `LEAF_TCP_WRITE_TIMEOUT_MS` | `3000` | Timeout writing framed response |
 | `LEAF_MAX_TCP_FRAME_BYTES` | `4096` | Max accepted incoming TCP DNS frame length |
 | `LEAF_MAX_UDP_REQUEST_BYTES` | `1232` | Max accepted incoming UDP DNS payload |
-| `LEAF_LOG_QUERIES` | `false` | Emit per-query success logs (`event=udp_query`/`event=tcp_query`) |
+| `LEAF_LOG_QUERIES` | `false` | Emit per-query success logs (`event=udp_query`/`event=tcp_query`) without client IP or qname |
 
 TOML key mapping in structured layout:
 
@@ -279,6 +279,7 @@ Optional per-query success logging:
 - Set `LEAF_LOG_QUERIES=true` or `[logging] query_log_enabled = true`
 - Emits one line per answered UDP request with `event=udp_query`.
 - Emits one line per answered TCP request with `event=tcp_query`.
+- Query logs intentionally omit client IP and full qname for data minimization.
 
 For Podman:
 

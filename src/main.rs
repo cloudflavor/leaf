@@ -96,33 +96,32 @@ async fn run_udp(socket: UdpSocket, runtime: RuntimeState) -> io::Result<()> {
 
         if received > runtime.limits.max_udp_request_bytes {
             eprintln!(
-                "event=udp_drop reason=request_too_large peer={} received_bytes={} limit_bytes={}",
-                peer, received, runtime.limits.max_udp_request_bytes
+                "event=udp_drop reason=request_too_large received_bytes={} limit_bytes={}",
+                received, runtime.limits.max_udp_request_bytes
             );
             continue;
         }
 
         if !runtime.query_rate_limiter.allow(peer.ip()) {
-            eprintln!("event=udp_drop reason=rate_limited peer={}", peer);
+            eprintln!("event=udp_drop reason=rate_limited");
             continue;
         }
 
         if let Some(response) = runtime.authority.build_response(&buffer[..received]) {
             if !allow_invalid_query_response(&runtime, peer.ip(), &response) {
-                let qname = response.query_name.as_deref().unwrap_or("-");
                 eprintln!(
-                    "event=udp_drop reason=invalid_query_rate_limited peer={} qname={} rcode={:?}",
-                    peer, qname, response.response_code
+                    "event=udp_drop reason=invalid_query_rate_limited rcode={:?}",
+                    response.response_code
                 );
                 continue;
             }
 
-            log_query_if_enabled(&runtime, "udp_query", peer, &response, received);
+            log_query_if_enabled(&runtime, "udp_query", &response, received);
 
             // Best effort; malformed peers should not terminate the server.
             let _ = socket.send_to(&response.wire_bytes, peer).await;
         } else {
-            eprintln!("event=udp_drop reason=parse_error peer={}", peer);
+            eprintln!("event=udp_drop reason=parse_error");
         }
     }
 }
@@ -136,10 +135,7 @@ async fn run_tcp(
         let (stream, peer) = listener.accept().await?;
 
         let Some(connection_permit) = tcp_connection_limiter.try_acquire(peer.ip()) else {
-            eprintln!(
-                "event=tcp_drop reason=connection_limit_reached peer={}",
-                peer
-            );
+            eprintln!("event=tcp_drop reason=connection_limit_reached");
             continue;
         };
 
@@ -149,7 +145,7 @@ async fn run_tcp(
             if let Err(error) =
                 handle_tcp_connection(stream, peer, runtime, connection_permit).await
             {
-                eprintln!("event=tcp_connection_error peer={} error={}", peer, error);
+                eprintln!("event=tcp_connection_error error={}", error);
             }
         });
     }
@@ -182,14 +178,14 @@ async fn handle_tcp_connection(
 
         if frame_len > runtime.limits.max_tcp_frame_bytes {
             eprintln!(
-                "event=tcp_drop reason=request_too_large peer={} received_bytes={} limit_bytes={}",
-                peer, frame_len, runtime.limits.max_tcp_frame_bytes
+                "event=tcp_drop reason=request_too_large received_bytes={} limit_bytes={}",
+                frame_len, runtime.limits.max_tcp_frame_bytes
             );
             return Ok(());
         }
 
         if !runtime.query_rate_limiter.allow(peer.ip()) {
-            eprintln!("event=tcp_drop reason=rate_limited peer={}", peer);
+            eprintln!("event=tcp_drop reason=rate_limited");
             return Ok(());
         }
 
@@ -203,20 +199,19 @@ async fn handle_tcp_connection(
         }
 
         let Some(response) = runtime.authority.build_response(&request) else {
-            eprintln!("event=tcp_drop reason=parse_error peer={}", peer);
+            eprintln!("event=tcp_drop reason=parse_error");
             return Ok(());
         };
 
         if !allow_invalid_query_response(&runtime, peer.ip(), &response) {
-            let qname = response.query_name.as_deref().unwrap_or("-");
             eprintln!(
-                "event=tcp_drop reason=invalid_query_rate_limited peer={} qname={} rcode={:?}",
-                peer, qname, response.response_code
+                "event=tcp_drop reason=invalid_query_rate_limited rcode={:?}",
+                response.response_code
             );
             return Ok(());
         }
 
-        log_query_if_enabled(&runtime, "tcp_query", peer, &response, frame_len);
+        log_query_if_enabled(&runtime, "tcp_query", &response, frame_len);
 
         let response_len = u16::try_from(response.wire_bytes.len()).map_err(|_| {
             io::Error::new(
@@ -244,7 +239,6 @@ async fn handle_tcp_connection(
 fn log_query_if_enabled(
     runtime: &RuntimeState,
     event: &str,
-    peer: SocketAddr,
     response: &BuiltResponse,
     request_bytes: usize,
 ) {
@@ -252,16 +246,13 @@ fn log_query_if_enabled(
         return;
     }
 
-    let qname = response.query_name.as_deref().unwrap_or("-");
     let qtype = response
         .query_type
         .map_or_else(|| "-".to_string(), |value| value.to_string());
 
     eprintln!(
-        "event={} peer={} qname={} qtype={} rcode={:?} authoritative={} answers={} authority={} request_bytes={} response_bytes={}",
+        "event={} qtype={} rcode={:?} authoritative={} answers={} authority={} request_bytes={} response_bytes={}",
         event,
-        peer,
-        qname,
         qtype,
         response.response_code,
         response.authoritative,
