@@ -21,7 +21,9 @@ The server now includes the following protections and protocol behavior:
 - UDP/TCP abuse controls:
   - global QPS limiter
   - per-IP QPS limiter
+  - per-IP + qname invalid-query limiter (`NXDOMAIN`/`REFUSED`/`FORMERR`)
   - bounded tracked-IP table for rate limiting
+  - bounded tracked key table for invalid-query throttling
   - global TCP connection cap
   - per-IP TCP connection cap
 - TCP hardening:
@@ -34,10 +36,12 @@ The server now includes the following protections and protocol behavior:
 ## Runtime Configuration
 
 All values are configurable via CLI flags or environment variables.
+You can also load values from a TOML file via `--config` or `LEAF_CONFIG`.
 
 Core DNS:
 
 - `LEAF_ZONE` (required): served authoritative zone, e.g. `dev.example.com`
+- `LEAF_CONFIG` (optional): path to TOML config file
 - `LEAF_LISTEN` (default `0.0.0.0:5300`)
 - `LEAF_TTL` (default `60`)
 - `LEAF_ZONE_NS` (default `ns1.<zone>`)
@@ -55,7 +59,9 @@ Traffic and connection controls:
 
 - `LEAF_GLOBAL_QPS_LIMIT` (default `5000`)
 - `LEAF_PER_IP_QPS_LIMIT` (default `200`)
+- `LEAF_PER_IP_INVALID_QNAME_QPS_LIMIT` (default `20`)
 - `LEAF_LIMITER_MAX_TRACKED_IPS` (default `10000`)
+- `LEAF_INVALID_QNAME_LIMITER_MAX_TRACKED_KEYS` (default `50000`)
 - `LEAF_TCP_MAX_CONNECTIONS` (default `1024`)
 - `LEAF_TCP_MAX_CONNECTIONS_PER_IP` (default `64`)
 - `LEAF_TCP_IDLE_TIMEOUT_MS` (default `10000`)
