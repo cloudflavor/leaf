@@ -7,11 +7,9 @@
 - `src/dns.rs`: authoritative DNS response logic.
 - `src/limits.rs`: rate and connection limiters.
 - Integration tests live in `tests/` (`tests/e2e.rs`) and exercise the real binary over sockets.
-- Operational and deployment docs:
-- `README.md` (user-facing docs),
-- `PRODUCTION_READINESS.md` (internet exposure checklist),
-- `leaf.example.toml` (config template),
-- `.gitlab-ci.yml` (pipeline definition).
+- `README.md` (user-facing docs), `PRODUCTION_READINESS.md` (internet exposure checklist),
+  `leaf.example.toml` (config template), `.gitlab-ci.yml` (pipeline definition).
+- Container deployment assets: `Containerfile` and `.containerignore`.
 
 ## Build, Test, and Development Commands
 - `cargo build` — compile debug binary.
@@ -23,14 +21,16 @@
 - `cargo test --locked` — run unit + integration tests.
 - `cargo test --all-targets --all-features --release --locked` — extended test run.
 - `opal run --no-tui` — run local CI pipeline emulation.
+- `podman build -t leaf:latest -f Containerfile .` — build container image.
+- `podman run --rm -e LEAF_ZONE=dev.example.com -p 5300:5300/udp -p 5300:5300/tcp leaf:latest` — run in container.
 
 ## Coding Style & Naming Conventions
 - Rust 2024 edition, standard `rustfmt` style (4-space indentation by formatter).
 - Prefer small, focused functions and explicit error propagation (`Result`, no `unwrap` in production paths).
 - Naming conventions:
-- `snake_case` for functions/variables/modules,
-- `CamelCase` for types/structs/enums,
-- clear config names matching env/TOML keys (e.g., `per_ip_qps_limit`).
+- `snake_case` for functions/variables/modules.
+- `CamelCase` for types/structs/enums.
+- Clear config names matching env/TOML keys (e.g., `per_ip_qps_limit`).
 
 ## Testing Guidelines
 - Add unit tests near logic modules (`#[cfg(test)]` in `src/*.rs`).
@@ -43,10 +43,10 @@
 - Keep commits scoped and meaningful (avoid mixing unrelated changes).
 - Use signed + signed-off commits where required (`git commit -sS`).
 - PRs should include:
-- concise summary,
-- rationale and risk notes,
-- test evidence (local command output or CI/opal result),
-- config/doc updates when behavior changes.
+- Concise summary.
+- Rationale and risk notes.
+- Test evidence (local command output or CI/opal result).
+- Config/doc updates when behavior changes.
 
 ## Security & Configuration Tips
 - Do not commit `leaf.toml` (local runtime config); use `leaf.example.toml`.

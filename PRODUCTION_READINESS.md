@@ -31,12 +31,12 @@ The server now includes the following protections and protocol behavior:
   - max framed request size bound
 - UDP hardening:
   - max datagram request size bound
-- Structured operational logs for startup and drop reasons (`rate_limited`, `request_too_large`, `parse_error`, `connection_limit_reached`).
+- Structured operational logs for startup and drop reasons (`rate_limited`, `invalid_query_rate_limited`, `request_too_large`, `parse_error`, `connection_limit_reached`).
 
 ## Runtime Configuration
 
 All values are configurable via CLI flags or environment variables.
-You can also load values from a TOML file via `--config` or `LEAF_CONFIG`.
+You can also load values from a TOML file via `--config` or `LEAF_CONFIG` (or `./leaf.toml` if present).
 
 Core DNS:
 
@@ -96,6 +96,36 @@ sudo -u leaf \
   ./target/release/leaf
 ```
 
+### 1a. Podman Deployment Profile (Hetzner)
+
+Build container image:
+
+```bash
+podman build -t leaf:latest -f Containerfile .
+```
+
+Run in container with minimum capabilities:
+
+```bash
+sudo podman run -d --name leaf --restart=always \
+  --read-only \
+  --cap-drop=all \
+  --cap-add=NET_BIND_SERVICE \
+  -e LEAF_ZONE=dev.example.com \
+  -e LEAF_LISTEN=0.0.0.0:53 \
+  -e LEAF_CONFIG=/etc/leaf/leaf.toml \
+  -v ./leaf.toml:/etc/leaf/leaf.toml:ro \
+  -p 53:53/udp \
+  -p 53:53/tcp \
+  leaf:latest
+```
+
+Notes:
+
+- Rootful Podman is recommended for direct binding on host port `53`.
+- Keep filesystem read-only except explicit mounted config/log paths.
+- Validate startup logs after restart to confirm bind and config load.
+
 ### 2. Lock Down Firewall
 
 Expose only DNS:
@@ -138,6 +168,7 @@ At minimum, alert on:
 
 - process restarts
 - sustained `rate_limited` events above baseline
+- sustained `invalid_query_rate_limited` events above baseline
 - sustained parse-error spikes
 - socket bind/startup failures
 
