@@ -10,6 +10,12 @@ It serves deterministic `A` records from encoded IPv4 names inside a configured 
 - `api.10-11-12-13.dev.example.com` -> `10.11.12.13`
 - `1.2.3.4.dev.example.com` -> `1.2.3.4`
 
+## Current Deployment
+
+`leaf` is currently serving `xip.kali.st` in production, including names such as:
+
+- `172-16-15-103.xip.kali.st` -> `172.16.15.103`
+
 ## Features
 
 - Authoritative-only DNS behavior for one or more configured zones.
@@ -23,6 +29,7 @@ It serves deterministic `A` records from encoded IPv4 names inside a configured 
 - TCP idle/read/write timeouts.
 - UDP and TCP request size bounds.
 - Structured operational logs for startup and dropped requests.
+- Optional per-query success logs for UDP/TCP.
 
 ## DNS Behavior
 
@@ -145,12 +152,16 @@ tcp_read_timeout_ms = 3000
 tcp_write_timeout_ms = 3000
 max_tcp_frame_bytes = 4096
 max_udp_request_bytes = 1232
+
+[logging]
+query_log_enabled = false
 ```
 
 Notes:
 
 - Top-level flat keys are still accepted for backward compatibility.
 - If `dns.zone_ns`/`dns.zone_hostmaster` are omitted, defaults are derived per zone (`ns1.<zone>`, `hostmaster.<zone>`).
+- Set `[logging].query_log_enabled = true` (or `LEAF_LOG_QUERIES=true`) to emit one structured log line per answered DNS query (`event=udp_query` / `event=tcp_query`).
 
 ## Podman (Hetzner) Quickstart
 
@@ -222,6 +233,7 @@ For TOML, you can use either flat top-level keys (legacy) or the structured layo
 | `LEAF_TCP_WRITE_TIMEOUT_MS` | `3000` | Timeout writing framed response |
 | `LEAF_MAX_TCP_FRAME_BYTES` | `4096` | Max accepted incoming TCP DNS frame length |
 | `LEAF_MAX_UDP_REQUEST_BYTES` | `1232` | Max accepted incoming UDP DNS payload |
+| `LEAF_LOG_QUERIES` | `false` | Emit per-query success logs (`event=udp_query`/`event=tcp_query`) |
 
 TOML key mapping in structured layout:
 
@@ -234,6 +246,7 @@ TOML key mapping in structured layout:
 - `LEAF_GLOBAL_QPS_LIMIT`, `LEAF_PER_IP_QPS_LIMIT`, `LEAF_PER_IP_INVALID_QNAME_QPS_LIMIT` -> `[limits] ...`
 - `LEAF_LIMITER_MAX_TRACKED_IPS`, `LEAF_INVALID_QNAME_LIMITER_MAX_TRACKED_KEYS` -> `[limits] ...`
 - `LEAF_TCP_*`, `LEAF_MAX_TCP_FRAME_BYTES`, `LEAF_MAX_UDP_REQUEST_BYTES` -> `[limits] ...`
+- `LEAF_LOG_QUERIES` -> `[logging] query_log_enabled = ...` (legacy top-level `log_queries = ...` is also accepted)
 
 ## Query Examples
 
@@ -249,6 +262,28 @@ dig @127.0.0.1 -p 5300 dev.example.com NS +norecurse
 
 # NXDOMAIN with SOA authority
 dig @127.0.0.1 -p 5300 nope.dev.example.com A +norecurse
+```
+
+## Logging
+
+`leaf` logs to stderr as structured key/value lines.
+
+Always logged:
+
+- startup events (`event=startup`)
+- dropped/blocked traffic (`event=udp_drop`, `event=tcp_drop`)
+- TCP handler failures (`event=tcp_connection_error`)
+
+Optional per-query success logging:
+
+- Set `LEAF_LOG_QUERIES=true` or `[logging] query_log_enabled = true`
+- Emits one line per answered UDP request with `event=udp_query`.
+- Emits one line per answered TCP request with `event=tcp_query`.
+
+For Podman:
+
+```bash
+sudo podman logs -f leaf
 ```
 
 ## Testing

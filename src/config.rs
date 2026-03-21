@@ -29,6 +29,7 @@ const DEFAULT_TCP_READ_TIMEOUT_MS: u64 = 3000;
 const DEFAULT_TCP_WRITE_TIMEOUT_MS: u64 = 3000;
 const DEFAULT_MAX_TCP_FRAME_BYTES: u32 = 4096;
 const DEFAULT_MAX_UDP_REQUEST_BYTES: u32 = 1232;
+const DEFAULT_QUERY_LOG_ENABLED: bool = false;
 
 #[derive(Debug, StructOpt, Clone, Default)]
 #[structopt(name = "leaf", about = "Authoritative DNS for nip.io-style hostnames")]
@@ -101,6 +102,9 @@ pub struct Cli {
 
     #[structopt(long = "max-udp-request-bytes")]
     max_udp_request_bytes: Option<u32>,
+
+    #[structopt(long = "log-queries")]
+    log_queries: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -128,6 +132,7 @@ struct EnvConfig {
     tcp_write_timeout_ms: Option<u64>,
     max_tcp_frame_bytes: Option<u32>,
     max_udp_request_bytes: Option<u32>,
+    log_queries: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -155,9 +160,11 @@ struct FileConfig {
     tcp_write_timeout_ms: Option<u64>,
     max_tcp_frame_bytes: Option<u32>,
     max_udp_request_bytes: Option<u32>,
+    log_queries: Option<bool>,
     dns: Option<FileDnsConfig>,
     soa: Option<FileSoaConfig>,
     limits: Option<FileLimitsConfig>,
+    logging: Option<FileLoggingConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -192,6 +199,11 @@ struct FileLimitsConfig {
     max_udp_request_bytes: Option<u32>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+struct FileLoggingConfig {
+    query_log_enabled: Option<bool>,
+}
+
 #[derive(Debug, Clone, Default)]
 struct RawConfigInputs {
     zones: Vec<String>,
@@ -216,6 +228,7 @@ struct RawConfigInputs {
     tcp_write_timeout_ms: Option<u64>,
     max_tcp_frame_bytes: Option<u32>,
     max_udp_request_bytes: Option<u32>,
+    query_log_enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -223,6 +236,7 @@ pub struct Config {
     pub zones: Vec<ZoneConfig>,
     pub listen: SocketAddr,
     pub limits: LimitsConfig,
+    pub query_log_enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -299,6 +313,7 @@ impl EnvConfig {
             tcp_write_timeout_ms: parse_env("LEAF_TCP_WRITE_TIMEOUT_MS")?,
             max_tcp_frame_bytes: parse_env("LEAF_MAX_TCP_FRAME_BYTES")?,
             max_udp_request_bytes: parse_env("LEAF_MAX_UDP_REQUEST_BYTES")?,
+            log_queries: parse_env("LEAF_LOG_QUERIES")?,
         })
     }
 }
@@ -348,6 +363,7 @@ impl TryFrom<RawConfigInputs> for Config {
         let max_udp_request_bytes = raw
             .max_udp_request_bytes
             .unwrap_or(DEFAULT_MAX_UDP_REQUEST_BYTES);
+        let query_log_enabled = raw.query_log_enabled.unwrap_or(DEFAULT_QUERY_LOG_ENABLED);
 
         if ttl == 0 {
             return Err(io::Error::new(
@@ -496,6 +512,7 @@ impl TryFrom<RawConfigInputs> for Config {
                 max_tcp_frame_bytes: max_tcp_frame_bytes as usize,
                 max_udp_request_bytes: max_udp_request_bytes as usize,
             },
+            query_log_enabled,
         })
     }
 }
@@ -538,6 +555,7 @@ fn merge_inputs(cli: Cli, env_config: EnvConfig, file_config: FileConfig) -> Raw
     let file_dns = file_config.dns.as_ref();
     let file_soa = file_config.soa.as_ref();
     let file_limits = file_config.limits.as_ref();
+    let file_logging = file_config.logging.as_ref();
     let file_zones = zones_from_file_config(&file_config);
     RawConfigInputs {
         zones: pick_zones(cli.zones, env_config.zones, file_zones),
@@ -684,6 +702,13 @@ fn merge_inputs(cli: Cli, env_config: EnvConfig, file_config: FileConfig) -> Raw
                 .max_udp_request_bytes
                 .or_else(|| file_limits.and_then(|limits| limits.max_udp_request_bytes)),
         ),
+        query_log_enabled: pick(
+            cli.log_queries,
+            env_config.log_queries,
+            file_config
+                .log_queries
+                .or_else(|| file_logging.and_then(|logging| logging.query_log_enabled)),
+        ),
     }
 }
 
@@ -818,6 +843,7 @@ mod tests {
             tcp_write_timeout_ms: Some(1000),
             max_tcp_frame_bytes: Some(4096),
             max_udp_request_bytes: Some(1232),
+            query_log_enabled: Some(false),
         }
     }
 
@@ -972,7 +998,7 @@ mod tests {
 
         fs::write(
             &path,
-            "zones = [\"dev.example.com\"]\n[dns]\nttl = 120\nzone_ns = \"ns9.dev.example.com\"\n[soa]\nserial = 7\nrefresh = 400\nretry = 90\nexpire = 90000\nminimum = 45\n[limits]\nglobal_qps_limit = 321\nper_ip_qps_limit = 111\nper_ip_invalid_qname_qps_limit = 22\nlimiter_max_tracked_ips = 555\ninvalid_qname_limiter_max_tracked_keys = 777\ntcp_max_connections = 333\ntcp_max_connections_per_ip = 44\ntcp_idle_timeout_ms = 9999\ntcp_read_timeout_ms = 2222\ntcp_write_timeout_ms = 3333\nmax_tcp_frame_bytes = 4097\nmax_udp_request_bytes = 1400\n",
+            "zones = [\"dev.example.com\"]\n[dns]\nttl = 120\nzone_ns = \"ns9.dev.example.com\"\n[soa]\nserial = 7\nrefresh = 400\nretry = 90\nexpire = 90000\nminimum = 45\n[limits]\nglobal_qps_limit = 321\nper_ip_qps_limit = 111\nper_ip_invalid_qname_qps_limit = 22\nlimiter_max_tracked_ips = 555\ninvalid_qname_limiter_max_tracked_keys = 777\ntcp_max_connections = 333\ntcp_max_connections_per_ip = 44\ntcp_idle_timeout_ms = 9999\ntcp_read_timeout_ms = 2222\ntcp_write_timeout_ms = 3333\nmax_tcp_frame_bytes = 4097\nmax_udp_request_bytes = 1400\n[logging]\nquery_log_enabled = true\n",
         )
         .unwrap_or_else(|err| panic!("failed writing nested config: {err}"));
 
@@ -986,7 +1012,40 @@ mod tests {
         assert_eq!(merged.soa_serial, Some(7));
         assert_eq!(merged.global_qps_limit, Some(321));
         assert_eq!(merged.max_udp_request_bytes, Some(1400));
+        assert_eq!(merged.query_log_enabled, Some(true));
 
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn merge_query_log_enabled_prefers_cli_over_env_over_file() {
+        let cli = Cli {
+            log_queries: Some(true),
+            ..Cli::default()
+        };
+        let env = EnvConfig {
+            log_queries: Some(false),
+            ..EnvConfig::default()
+        };
+        let file = FileConfig {
+            log_queries: Some(false),
+            logging: Some(FileLoggingConfig {
+                query_log_enabled: Some(false),
+            }),
+            ..FileConfig::default()
+        };
+
+        let merged = merge_inputs(cli, env, file.clone());
+        assert_eq!(merged.query_log_enabled, Some(true));
+
+        let merged_env = merge_inputs(
+            Cli::default(),
+            EnvConfig {
+                log_queries: Some(true),
+                ..EnvConfig::default()
+            },
+            file,
+        );
+        assert_eq!(merged_env.query_log_enabled, Some(true));
     }
 }

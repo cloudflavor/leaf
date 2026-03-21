@@ -25,6 +25,7 @@ struct RuntimeState {
     query_rate_limiter: QueryRateLimiter,
     invalid_query_rate_limiter: InvalidQueryRateLimiter,
     limits: LimitsConfig,
+    query_log_enabled: bool,
 }
 
 #[tokio::main]
@@ -43,6 +44,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             config.limits.invalid_qname_limiter_max_tracked_keys,
         ),
         limits: config.limits.clone(),
+        query_log_enabled: config.query_log_enabled,
     };
 
     let tcp_connection_limiter = TcpConnectionLimiter::new(
@@ -72,6 +74,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.limits.tcp_max_connections_per_ip,
         config.limits.max_udp_request_bytes,
         config.limits.max_tcp_frame_bytes,
+    );
+    eprintln!(
+        "event=startup message='query logging configuration' query_log_enabled={}",
+        config.query_log_enabled
     );
 
     tokio::try_join!(
@@ -110,6 +116,8 @@ async fn run_udp(socket: UdpSocket, runtime: RuntimeState) -> io::Result<()> {
                 );
                 continue;
             }
+
+            log_query_if_enabled(&runtime, "udp_query", peer, &response, received);
 
             // Best effort; malformed peers should not terminate the server.
             let _ = socket.send_to(&response.wire_bytes, peer).await;
@@ -208,6 +216,8 @@ async fn handle_tcp_connection(
             return Ok(());
         }
 
+        log_query_if_enabled(&runtime, "tcp_query", peer, &response, frame_len);
+
         let response_len = u16::try_from(response.wire_bytes.len()).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -229,6 +239,37 @@ async fn handle_tcp_connection(
         )
         .await?;
     }
+}
+
+fn log_query_if_enabled(
+    runtime: &RuntimeState,
+    event: &str,
+    peer: SocketAddr,
+    response: &BuiltResponse,
+    request_bytes: usize,
+) {
+    if !runtime.query_log_enabled {
+        return;
+    }
+
+    let qname = response.query_name.as_deref().unwrap_or("-");
+    let qtype = response
+        .query_type
+        .map_or_else(|| "-".to_string(), |value| value.to_string());
+
+    eprintln!(
+        "event={} peer={} qname={} qtype={} rcode={:?} authoritative={} answers={} authority={} request_bytes={} response_bytes={}",
+        event,
+        peer,
+        qname,
+        qtype,
+        response.response_code,
+        response.authoritative,
+        response.answer_count,
+        response.authority_count,
+        request_bytes,
+        response.wire_bytes.len(),
+    );
 }
 
 async fn read_exact_with_timeout(

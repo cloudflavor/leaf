@@ -11,6 +11,10 @@ pub struct BuiltResponse {
     pub wire_bytes: Vec<u8>,
     pub response_code: ResponseCode,
     pub query_name: Option<String>,
+    pub query_type: Option<RecordType>,
+    pub authoritative: bool,
+    pub answer_count: u16,
+    pub authority_count: u16,
 }
 
 #[derive(Debug, Clone)]
@@ -176,11 +180,19 @@ impl AuthorityZone {
 
 fn finalize_response(response: Message, query_name: Option<String>) -> Option<BuiltResponse> {
     let response_code = response.response_code();
+    let query_type = response.queries().first().map(Query::query_type);
+    let authoritative = response.authoritative();
+    let answer_count = response.answers().len() as u16;
+    let authority_count = response.name_servers().len() as u16;
     let wire_bytes = response.to_vec().ok()?;
     Some(BuiltResponse {
         wire_bytes,
         response_code,
         query_name,
+        query_type,
+        authoritative,
+        answer_count,
+        authority_count,
     })
 }
 
