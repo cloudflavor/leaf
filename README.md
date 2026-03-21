@@ -1,5 +1,7 @@
 # leaf
 
+[![Docker Repository on Quay](https://quay.io/repository/cloudflavor/leaf/status "Docker Repository on Quay")](https://quay.io/repository/cloudflavor/leaf)  
+
 `leaf` is an authoritative DNS server for nip.io-style hostnames, implemented in Rust and hardened for internet-facing deployment.
 
 It serves deterministic `A` records from encoded IPv4 names inside a configured zone, for example:
@@ -10,7 +12,7 @@ It serves deterministic `A` records from encoded IPv4 names inside a configured 
 
 ## Features
 
-- Authoritative-only DNS behavior for a single configured zone.
+- Authoritative-only DNS behavior for one or more configured zones.
 - UDP and TCP listeners.
 - Correct negative responses with SOA authority section for `NXDOMAIN` and `NODATA`.
 - Apex authoritative `SOA` and `NS` records.
@@ -74,15 +76,16 @@ cargo build --release
 Minimum required configuration:
 
 ```bash
-LEAF_ZONE=dev.example.com cargo run
+LEAF_ZONES=dev.example.com cargo run
 ```
 
 This starts the server on `0.0.0.0:5300` by default.
+`LEAF_ZONE` remains supported as a single-zone shorthand.
 
 Example with explicit bind and TTL:
 
 ```bash
-LEAF_ZONE=dev.example.com \
+LEAF_ZONES=dev.example.com,prod.example.com \
 LEAF_LISTEN=127.0.0.1:5300 \
 LEAF_TTL=60 \
 cargo run
@@ -104,6 +107,51 @@ Precedence is:
 
 Use [`leaf.example.toml`](leaf.example.toml) as the template.
 
+For zone selection:
+
+- `--zone` can be provided multiple times or as a comma-separated list.
+- `LEAF_ZONES` accepts comma-separated zones.
+- `LEAF_ZONE` is still supported for a single zone.
+- In TOML, `zones = ["dev.example.com", "prod.example.com"]` is preferred; legacy `zone = "..."` remains supported.
+
+Recommended `leaf.toml` layout:
+
+```toml
+zones = ["dev.example.com", "prod.example.com"]
+listen = "0.0.0.0:5300"
+
+[dns]
+ttl = 60
+# zone_ns = "ns1.dev.example.com"
+# zone_hostmaster = "hostmaster.dev.example.com"
+
+[soa]
+serial = 1
+refresh = 300
+retry = 60
+expire = 86400
+minimum = 60
+
+[limits]
+global_qps_limit = 5000
+per_ip_qps_limit = 200
+per_ip_invalid_qname_qps_limit = 20
+limiter_max_tracked_ips = 10000
+invalid_qname_limiter_max_tracked_keys = 50000
+tcp_max_connections = 1024
+tcp_max_connections_per_ip = 64
+tcp_idle_timeout_ms = 10000
+tcp_read_timeout_ms = 3000
+tcp_write_timeout_ms = 3000
+max_tcp_frame_bytes = 4096
+max_udp_request_bytes = 1232
+```
+
+Notes:
+
+- Top-level flat keys are still accepted for backward compatibility.
+- If `dns.zone_ns`/`dns.zone_hostmaster` are omitted, defaults are derived per zone (`ns1.<zone>`, `hostmaster.<zone>`).
+
 ## Podman (Hetzner) Quickstart
 
 Build image:
@@ -116,7 +164,7 @@ Run on high port (works well for rootless local validation):
 
 ```bash
 podman run --rm --name leaf \
-  -e LEAF_ZONE=dev.example.com \
+  -e LEAF_ZONES=dev.example.com,prod.example.com \
   -p 5300:5300/udp \
   -p 5300:5300/tcp \
   leaf:latest
@@ -129,7 +177,7 @@ sudo podman run -d --name leaf --restart=always \
   --read-only \
   --cap-drop=all \
   --cap-add=NET_BIND_SERVICE \
-  -e LEAF_ZONE=dev.example.com \
+  -e LEAF_ZONES=dev.example.com,prod.example.com \
   -e LEAF_LISTEN=0.0.0.0:53 \
   -e LEAF_CONFIG=/etc/leaf/leaf.toml \
   -v ./leaf.toml:/etc/leaf/leaf.toml:ro \
@@ -146,12 +194,13 @@ Notes:
 ## Configuration Reference
 
 All options are available via CLI flags and environment variables.
-All options are also available in `leaf.toml` with the same snake_case names.
+For TOML, you can use either flat top-level keys (legacy) or the structured layout shown above.
 
 | Variable | Default | Description |
 |---|---:|---|
 | `LEAF_CONFIG` | none | Path to TOML config file (same as `--config`) |
-| `LEAF_ZONE` | required | Authoritative zone (for example `dev.example.com`) |
+| `LEAF_ZONES` | required unless `LEAF_ZONE` is set | Comma-separated authoritative zones (for example `dev.example.com,prod.example.com`) |
+| `LEAF_ZONE` | optional | Backward-compatible single-zone shortcut |
 | `LEAF_LISTEN` | `0.0.0.0:5300` | Bind address and port for UDP+TCP |
 | `LEAF_TTL` | `60` | TTL for positive answers |
 | `LEAF_ZONE_NS` | `ns1.<zone>` | Zone apex NS target |
@@ -173,6 +222,18 @@ All options are also available in `leaf.toml` with the same snake_case names.
 | `LEAF_TCP_WRITE_TIMEOUT_MS` | `3000` | Timeout writing framed response |
 | `LEAF_MAX_TCP_FRAME_BYTES` | `4096` | Max accepted incoming TCP DNS frame length |
 | `LEAF_MAX_UDP_REQUEST_BYTES` | `1232` | Max accepted incoming UDP DNS payload |
+
+TOML key mapping in structured layout:
+
+- `LEAF_ZONES` -> `zones = ["..."]`
+- `LEAF_LISTEN` -> `listen = "ip:port"`
+- `LEAF_TTL` -> `[dns] ttl = ...`
+- `LEAF_ZONE_NS` -> `[dns] zone_ns = "..."`
+- `LEAF_ZONE_HOSTMASTER` -> `[dns] zone_hostmaster = "..."`
+- `LEAF_SOA_*` -> `[soa] ...`
+- `LEAF_GLOBAL_QPS_LIMIT`, `LEAF_PER_IP_QPS_LIMIT`, `LEAF_PER_IP_INVALID_QNAME_QPS_LIMIT` -> `[limits] ...`
+- `LEAF_LIMITER_MAX_TRACKED_IPS`, `LEAF_INVALID_QNAME_LIMITER_MAX_TRACKED_KEYS` -> `[limits] ...`
+- `LEAF_TCP_*`, `LEAF_MAX_TCP_FRAME_BYTES`, `LEAF_MAX_UDP_REQUEST_BYTES` -> `[limits] ...`
 
 ## Query Examples
 
@@ -226,8 +287,8 @@ Quay publish job requires these CI/CD variables:
 
 Image destination defaults to:
 
-- `quay.io/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME:$CI_COMMIT_TAG`
-- `quay.io/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME:latest`
+- `quay.io/cloudflavor/leaf:${GIT_COMMIT_TAG}` (fallback to `${CI_COMMIT_TAG}` in GitLab)
+- `quay.io/cloudflavor/leaf:latest`
 
 Local pipeline emulation with `opal`:
 
@@ -249,7 +310,7 @@ Minimum production expectations:
 
 ## Current Scope and Limitations
 
-- Authoritative server for one zone per process.
+- Shared TTL/SOA/limit settings across all configured zones.
 - IPv4 `A` synthesis only.
 - No recursive resolution.
 - No DNSSEC implementation.
@@ -257,4 +318,4 @@ Minimum production expectations:
 
 ## License
 
-Define your project license here (for example MIT/Apache-2.0).
+Apache-2.0. See [LICENSE](LICENSE).

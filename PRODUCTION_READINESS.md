@@ -6,7 +6,7 @@ This document describes the current public-exposure posture of `leaf` and the ex
 
 The server now includes the following protections and protocol behavior:
 
-- Authoritative-only behavior for a configured zone (`AA` set only for in-zone answers).
+- Authoritative-only behavior for configured zone(s) (`AA` set only for in-zone answers).
 - Strict DNS query validation:
   - non-`QUERY` opcodes return `NOTIMP`
   - multi-question requests return `FORMERR`
@@ -40,7 +40,8 @@ You can also load values from a TOML file via `--config` or `LEAF_CONFIG` (or `.
 
 Core DNS:
 
-- `LEAF_ZONE` (required): served authoritative zone, e.g. `dev.example.com`
+- `LEAF_ZONES` (required unless `LEAF_ZONE` is set): comma-separated served zones, e.g. `dev.example.com,prod.example.com`
+- `LEAF_ZONE` (optional): backward-compatible single-zone shortcut
 - `LEAF_CONFIG` (optional): path to TOML config file
 - `LEAF_LISTEN` (default `0.0.0.0:5300`)
 - `LEAF_TTL` (default `60`)
@@ -91,7 +92,7 @@ Run as dedicated user (example):
 ```bash
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin leaf
 sudo -u leaf \
-  LEAF_ZONE=dev.example.com \
+  LEAF_ZONES=dev.example.com,prod.example.com \
   LEAF_LISTEN=0.0.0.0:53 \
   ./target/release/leaf
 ```
@@ -111,7 +112,7 @@ sudo podman run -d --name leaf --restart=always \
   --read-only \
   --cap-drop=all \
   --cap-add=NET_BIND_SERVICE \
-  -e LEAF_ZONE=dev.example.com \
+  -e LEAF_ZONES=dev.example.com,prod.example.com \
   -e LEAF_LISTEN=0.0.0.0:53 \
   -e LEAF_CONFIG=/etc/leaf/leaf.toml \
   -v ./leaf.toml:/etc/leaf/leaf.toml:ro \

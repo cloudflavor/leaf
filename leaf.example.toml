@@ -1,20 +1,30 @@
 # Copy to leaf.toml (or pass --config /path/to/file.toml)
 # Precedence is: CLI flags > environment variables > TOML file.
 
-zone = "dev.example.com"
+# One or more authoritative zones.
+# `zone = "..."` is still supported for backward compatibility.
+zones = ["dev.example.com", "prod.example.com"]
+
+# Listener for both UDP and TCP DNS.
 listen = "0.0.0.0:5300"
+
+[dns]
+# Positive-answer TTL.
 ttl = 60
 
-# Optional; defaults to ns1.<zone> and hostmaster.<zone> when omitted.
-zone_ns = "ns1.dev.example.com"
-zone_hostmaster = "hostmaster.dev.example.com"
+# Optional global overrides. If omitted, defaults are derived per-zone:
+# ns1.<zone> and hostmaster.<zone>
+# zone_ns = "ns1.dev.example.com"
+# zone_hostmaster = "hostmaster.dev.example.com"
 
-soa_serial = 1
-soa_refresh = 300
-soa_retry = 60
-soa_expire = 86400
-soa_minimum = 60
+[soa]
+serial = 1
+refresh = 300
+retry = 60
+expire = 86400
+minimum = 60
 
+[limits]
 global_qps_limit = 5000
 per_ip_qps_limit = 200
 per_ip_invalid_qname_qps_limit = 20

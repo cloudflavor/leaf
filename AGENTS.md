@@ -22,7 +22,7 @@
 - `cargo test --all-targets --all-features --release --locked` — extended test run.
 - `opal run --no-tui` — run local CI pipeline emulation.
 - `podman build -t leaf:latest -f Containerfile .` — build container image.
-- `podman run --rm -e LEAF_ZONE=dev.example.com -p 5300:5300/udp -p 5300:5300/tcp leaf:latest` — run in container.
+- `podman run --rm -e LEAF_ZONES=dev.example.com,prod.example.com -p 5300:5300/udp -p 5300:5300/tcp leaf:latest` — run in container.
 
 ## Coding Style & Naming Conventions
 - Rust 2024 edition, standard `rustfmt` style (4-space indentation by formatter).
