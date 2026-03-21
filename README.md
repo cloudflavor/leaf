@@ -267,6 +267,8 @@ Test coverage currently includes:
 
 - Unit tests for parser/config/limiter and DNS logic.
 - End-to-end integration tests that spawn the real `leaf` binary and query it over UDP and TCP.
+- E2E protocol matrix coverage for apex records, positive A synthesis, NXDOMAIN/NODATA, `ANY` refusal, out-of-zone refusal, non-`QUERY` opcode handling, and multi-question `FORMERR`.
+- E2E coverage for structured TOML startup and invalid-query throttling behavior.
 
 ## CI/CD
 
