@@ -110,6 +110,8 @@ podman build -t leaf:latest -f Containerfile .
 Run in container with minimum capabilities:
 
 ```bash
+PUBLIC_IP=<your-public-ip>
+
 sudo podman run -d --name leaf --restart=always \
   --read-only \
   --cap-drop=all \
@@ -118,14 +120,15 @@ sudo podman run -d --name leaf --restart=always \
   -e LEAF_LISTEN=0.0.0.0:53 \
   -e LEAF_CONFIG=/etc/leaf/leaf.toml \
   -v ./leaf.toml:/etc/leaf/leaf.toml:ro \
-  -p 53:53/udp \
-  -p 53:53/tcp \
+  -p ${PUBLIC_IP}:53:53/udp \
+  -p ${PUBLIC_IP}:53:53/tcp \
   leaf:latest
 ```
 
 Notes:
 
 - Rootful Podman is recommended for direct binding on host port `53`.
+- Prefer binding published ports to the server public IP (not wildcard) to avoid host resolver/listener conflicts.
 - Keep filesystem read-only except explicit mounted config/log paths.
 - Validate startup logs after restart to confirm bind and config load.
 
