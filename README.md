@@ -16,6 +16,8 @@ It serves deterministic `A` records from encoded IPv4 names inside a configured 
 
 - `172-16-15-103.xip.kali.st` -> `172.16.15.103`
 
+Official public webpage: `https://kali.st`
+
 ## Features
 
 - Authoritative-only DNS behavior for one or more configured zones.
