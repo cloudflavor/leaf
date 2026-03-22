@@ -56,13 +56,25 @@ cargo_test_extended:
 release:
   stage: release
   script:
-    - cargo build --release --locked
-    - mkdir -p dist
-    - cp target/release/leaf dist/leaf
+    - apt-get update && apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross && rm -rf /var/lib/apt/lists/*
+    - rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
+    - RELEASE_TAG="${GIT_COMMIT_TAG:-${CI_COMMIT_TAG:-${CI_COMMIT_SHORT_SHA}}}"
+    - export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+    - cargo build --release --locked --target x86_64-unknown-linux-gnu
+    - cargo build --release --locked --target aarch64-unknown-linux-gnu
+    - mkdir -p "dist/leaf-amd64-linux-${RELEASE_TAG}" "dist/leaf-arm64-linux-${RELEASE_TAG}"
+    - cp target/x86_64-unknown-linux-gnu/release/leaf "dist/leaf-amd64-linux-${RELEASE_TAG}/leaf"
+    - cp target/aarch64-unknown-linux-gnu/release/leaf "dist/leaf-arm64-linux-${RELEASE_TAG}/leaf"
+    - cp README.md LICENSE "dist/leaf-amd64-linux-${RELEASE_TAG}/"
+    - cp README.md LICENSE "dist/leaf-arm64-linux-${RELEASE_TAG}/"
+    - tar -C dist -czf "dist/leaf-amd64-linux-${RELEASE_TAG}.tar.gz" "leaf-amd64-linux-${RELEASE_TAG}"
+    - tar -C dist -czf "dist/leaf-arm64-linux-${RELEASE_TAG}.tar.gz" "leaf-arm64-linux-${RELEASE_TAG}"
+    - sha256sum dist/*.tar.gz > dist/SHA256SUMS
   artifacts:
     name: "leaf-${CI_COMMIT_TAG}"
     paths:
-      - dist/leaf
+      - dist/*.tar.gz
+      - dist/SHA256SUMS
     expire_in: 30 days
   rules:
     - if: $CI_COMMIT_TAG
