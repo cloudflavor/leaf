@@ -163,7 +163,8 @@ Notes:
 
 - Top-level flat keys are still accepted for backward compatibility.
 - If `dns.zone_ns`/`dns.zone_hostmaster` are omitted, defaults are derived per zone (`ns1.<zone>`, `hostmaster.<zone>`).
-- Set `[logging].query_log_enabled = true` (or `LEAF_LOG_QUERIES=true`) to emit one structured log line per answered DNS query (`event=udp_query` / `event=tcp_query`) without client IP or full qname.
+- Set `[logging].query_log_enabled = true` (or `LEAF_LOG_QUERIES=true`) to enable per-query log events.
+- Per-query events are emitted at `info` level.
 
 ## Podman (Hetzner) Quickstart
 
@@ -278,10 +279,11 @@ Always logged:
 
 Optional per-query success logging:
 
-- Set `LEAF_LOG_QUERIES=true` or `[logging] query_log_enabled = true`
-- Emits one line per answered UDP request with `event=udp_query`.
-- Emits one line per answered TCP request with `event=tcp_query`.
+- Set `LEAF_LOG_QUERIES=true` or `[logging] query_log_enabled = true`.
+- Emits one structured event per answered UDP request with `event=udp_query`.
+- Emits one structured event per answered TCP request with `event=tcp_query`.
 - Query logs intentionally omit client IP and full qname for data minimization.
+- Startup events are `info`, dropped/invalid traffic is `warn`, and handler failures are `error`.
 
 For Podman:
 
