@@ -317,7 +317,10 @@ The GitLab pipeline (`.gitlab-ci.yml`) contains:
 - `cargo_clippy`
 - `cargo_test`
 - `cargo_test_extended`
-- `release` job (tag-only) that builds release binary and publishes `dist/leaf` artifact
+- `release` job (tag-only) that builds Linux `amd64` + `arm64` binaries and publishes versioned tarballs:
+- `dist/leaf-amd64-linux-${TAG}.tar.gz`
+- `dist/leaf-arm64-linux-${TAG}.tar.gz`
+- `dist/SHA256SUMS`
 - `container_release` job (tag-only) that builds and publishes multi-arch (`amd64`, `arm64`) images to Quay
 
 Quay publish job requires these CI/CD variables:
