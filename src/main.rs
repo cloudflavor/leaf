@@ -12,6 +12,8 @@ use hickory_proto::op::ResponseCode;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::time::timeout;
+use tracing::{debug, error, info, warn};
+use tracing_subscriber::EnvFilter;
 
 use crate::config::{Config, LimitsConfig};
 use crate::dns::{BuiltResponse, DnsAuthority};
@@ -30,6 +32,8 @@ struct RuntimeState {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    init_logging();
+
     let config = Config::from_args()?;
 
     let runtime = RuntimeState {
@@ -62,22 +66,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .collect::<Vec<_>>()
         .join(",");
 
-    eprintln!(
-        "event=startup message='authoritative dns online' listen={} zones={} global_qps_limit={} per_ip_qps_limit={} per_ip_invalid_qname_qps_limit={} invalid_qname_limiter_max_tracked_keys={} tcp_max_connections={} tcp_max_connections_per_ip={} max_udp_request_bytes={} max_tcp_frame_bytes={}",
-        config.listen,
-        zones,
-        config.limits.global_qps_limit,
-        config.limits.per_ip_qps_limit,
-        config.limits.per_ip_invalid_qname_qps_limit,
-        config.limits.invalid_qname_limiter_max_tracked_keys,
-        config.limits.tcp_max_connections,
-        config.limits.tcp_max_connections_per_ip,
-        config.limits.max_udp_request_bytes,
-        config.limits.max_tcp_frame_bytes,
+    info!(
+        event = "startup",
+        message = "authoritative dns online",
+        listen = %config.listen,
+        zones = %zones,
+        global_qps_limit = config.limits.global_qps_limit,
+        per_ip_qps_limit = config.limits.per_ip_qps_limit,
+        per_ip_invalid_qname_qps_limit = config.limits.per_ip_invalid_qname_qps_limit,
+        invalid_qname_limiter_max_tracked_keys = config.limits.invalid_qname_limiter_max_tracked_keys,
+        tcp_max_connections = config.limits.tcp_max_connections,
+        tcp_max_connections_per_ip = config.limits.tcp_max_connections_per_ip,
+        max_udp_request_bytes = config.limits.max_udp_request_bytes,
+        max_tcp_frame_bytes = config.limits.max_tcp_frame_bytes
     );
-    eprintln!(
-        "event=startup message='query logging configuration' query_log_enabled={}",
-        config.query_log_enabled
+    info!(
+        event = "startup",
+        message = "query logging configuration",
+        query_log_enabled = config.query_log_enabled
     );
 
     tokio::try_join!(
@@ -95,23 +101,26 @@ async fn run_udp(socket: UdpSocket, runtime: RuntimeState) -> io::Result<()> {
         let (received, peer) = socket.recv_from(&mut buffer).await?;
 
         if received > runtime.limits.max_udp_request_bytes {
-            eprintln!(
-                "event=udp_drop reason=request_too_large received_bytes={} limit_bytes={}",
-                received, runtime.limits.max_udp_request_bytes
+            warn!(
+                event = "udp_drop",
+                reason = "request_too_large",
+                received_bytes = received,
+                limit_bytes = runtime.limits.max_udp_request_bytes
             );
             continue;
         }
 
         if !runtime.query_rate_limiter.allow(peer.ip()) {
-            eprintln!("event=udp_drop reason=rate_limited");
+            warn!(event = "udp_drop", reason = "rate_limited");
             continue;
         }
 
         if let Some(response) = runtime.authority.build_response(&buffer[..received]) {
             if !allow_invalid_query_response(&runtime, peer.ip(), &response) {
-                eprintln!(
-                    "event=udp_drop reason=invalid_query_rate_limited rcode={:?}",
-                    response.response_code
+                warn!(
+                    event = "udp_drop",
+                    reason = "invalid_query_rate_limited",
+                    rcode = ?response.response_code
                 );
                 continue;
             }
@@ -119,9 +128,11 @@ async fn run_udp(socket: UdpSocket, runtime: RuntimeState) -> io::Result<()> {
             log_query_if_enabled(&runtime, "udp_query", &response, received);
 
             // Best effort; malformed peers should not terminate the server.
-            let _ = socket.send_to(&response.wire_bytes, peer).await;
+            if let Err(error) = socket.send_to(&response.wire_bytes, peer).await {
+                debug!(event = "udp_send_error", error = %error);
+            }
         } else {
-            eprintln!("event=udp_drop reason=parse_error");
+            warn!(event = "udp_drop", reason = "parse_error");
         }
     }
 }
@@ -135,7 +146,7 @@ async fn run_tcp(
         let (stream, peer) = listener.accept().await?;
 
         let Some(connection_permit) = tcp_connection_limiter.try_acquire(peer.ip()) else {
-            eprintln!("event=tcp_drop reason=connection_limit_reached");
+            warn!(event = "tcp_drop", reason = "connection_limit_reached");
             continue;
         };
 
@@ -145,7 +156,7 @@ async fn run_tcp(
             if let Err(error) =
                 handle_tcp_connection(stream, peer, runtime, connection_permit).await
             {
-                eprintln!("event=tcp_connection_error error={}", error);
+                error!(event = "tcp_connection_error", error = %error);
             }
         });
     }
@@ -177,15 +188,17 @@ async fn handle_tcp_connection(
         }
 
         if frame_len > runtime.limits.max_tcp_frame_bytes {
-            eprintln!(
-                "event=tcp_drop reason=request_too_large received_bytes={} limit_bytes={}",
-                frame_len, runtime.limits.max_tcp_frame_bytes
+            warn!(
+                event = "tcp_drop",
+                reason = "request_too_large",
+                received_bytes = frame_len,
+                limit_bytes = runtime.limits.max_tcp_frame_bytes
             );
             return Ok(());
         }
 
         if !runtime.query_rate_limiter.allow(peer.ip()) {
-            eprintln!("event=tcp_drop reason=rate_limited");
+            warn!(event = "tcp_drop", reason = "rate_limited");
             return Ok(());
         }
 
@@ -199,14 +212,15 @@ async fn handle_tcp_connection(
         }
 
         let Some(response) = runtime.authority.build_response(&request) else {
-            eprintln!("event=tcp_drop reason=parse_error");
+            warn!(event = "tcp_drop", reason = "parse_error");
             return Ok(());
         };
 
         if !allow_invalid_query_response(&runtime, peer.ip(), &response) {
-            eprintln!(
-                "event=tcp_drop reason=invalid_query_rate_limited rcode={:?}",
-                response.response_code
+            warn!(
+                event = "tcp_drop",
+                reason = "invalid_query_rate_limited",
+                rcode = ?response.response_code
             );
             return Ok(());
         }
@@ -250,17 +264,26 @@ fn log_query_if_enabled(
         .query_type
         .map_or_else(|| "-".to_string(), |value| value.to_string());
 
-    eprintln!(
-        "event={} qtype={} rcode={:?} authoritative={} answers={} authority={} request_bytes={} response_bytes={}",
-        event,
-        qtype,
-        response.response_code,
-        response.authoritative,
-        response.answer_count,
-        response.authority_count,
-        request_bytes,
-        response.wire_bytes.len(),
+    info!(
+        event = event,
+        qtype = %qtype,
+        rcode = ?response.response_code,
+        authoritative = response.authoritative,
+        answers = response.answer_count,
+        authority = response.authority_count,
+        request_bytes = request_bytes,
+        response_bytes = response.wire_bytes.len()
     );
+}
+
+fn init_logging() {
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_ansi(false)
+        .with_target(false)
+        .compact()
+        .init();
 }
 
 async fn read_exact_with_timeout(
