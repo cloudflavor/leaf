@@ -296,6 +296,59 @@ For Podman:
 sudo podman logs -f leaf
 ```
 
+## Fail2ban Integration
+
+`leaf` does not integrate with fail2ban in-process. Integration is log-based.
+
+1. Enable source fields on drop events:
+
+```toml
+[logging]
+query_log_enabled = false
+drop_log_include_client_ip = true
+```
+
+2. Create a fail2ban filter at `/etc/fail2ban/filter.d/leaf-dns-drop.conf`:
+
+```ini
+[Definition]
+failregex = ^.*event="(?:udp_drop|tcp_drop)".*reason="(?:request_too_large|parse_error|invalid_query_rate_limited|rate_limited|connection_limit_reached)".*src_ip=<HOST>(?:\s|$).*
+ignoreregex =
+```
+
+3. Create a jail at `/etc/fail2ban/jail.d/leaf-dns.local`:
+
+```ini
+[leaf-dns-drop]
+enabled = true
+filter = leaf-dns-drop
+port = 53,53/udp
+findtime = 60
+maxretry = 20
+bantime = 15m
+backend = systemd
+journalmatch = _SYSTEMD_UNIT=leaf.service
+```
+
+4. If running as a Podman systemd unit, change `journalmatch` to the container unit, for example:
+
+```ini
+journalmatch = _SYSTEMD_UNIT=podman-leaf.service
+```
+
+5. Reload fail2ban:
+
+```bash
+sudo systemctl restart fail2ban
+sudo fail2ban-client status leaf-dns-drop
+```
+
+Operational notes:
+
+- Use higher `maxretry` for UDP-heavy patterns (`udp_drop parse_error`) because UDP source IP can be spoofed.
+- Keep `query_log_enabled=false` for privacy and volume control; fail2ban only needs drop events.
+- Fail2ban is useful for repeat source suppression, not a substitute for upstream DDoS controls.
+
 ## Testing
 
 Run all checks locally:

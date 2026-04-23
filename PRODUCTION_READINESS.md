@@ -180,6 +180,54 @@ At minimum, alert on:
 - sustained parse-error spikes
 - socket bind/startup failures
 
+### 7. Integrate Fail2ban for Repeat Offenders
+
+`leaf` integrates with fail2ban through logs.
+
+Required logging config:
+
+```toml
+[logging]
+query_log_enabled = false
+drop_log_include_client_ip = true
+```
+
+Example filter (`/etc/fail2ban/filter.d/leaf-dns-drop.conf`):
+
+```ini
+[Definition]
+failregex = ^.*event="(?:udp_drop|tcp_drop)".*reason="(?:request_too_large|parse_error|invalid_query_rate_limited|rate_limited|connection_limit_reached)".*src_ip=<HOST>(?:\s|$).*
+ignoreregex =
+```
+
+Example jail (`/etc/fail2ban/jail.d/leaf-dns.local`):
+
+```ini
+[leaf-dns-drop]
+enabled = true
+filter = leaf-dns-drop
+port = 53,53/udp
+findtime = 60
+maxretry = 20
+bantime = 15m
+backend = systemd
+journalmatch = _SYSTEMD_UNIT=leaf.service
+```
+
+For Podman systemd units, set `journalmatch` to the container unit (for example `_SYSTEMD_UNIT=podman-leaf.service`).
+
+Validation commands:
+
+```bash
+sudo systemctl restart fail2ban
+sudo fail2ban-client status leaf-dns-drop
+```
+
+Fail2ban caveats:
+
+- UDP source addresses can be spoofed; tune `maxretry` conservatively for UDP-dominated traffic.
+- Fail2ban reduces repeat noise but is not sufficient for volumetric DNS DDoS protection.
+
 ## Residual Risks (Operational)
 
 The binary-level controls are now in place, but public DNS operation still requires external safeguards:
