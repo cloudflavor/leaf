@@ -157,6 +157,7 @@ max_udp_request_bytes = 1232
 
 [logging]
 query_log_enabled = false
+drop_log_include_client_ip = false
 ```
 
 Notes:
@@ -164,6 +165,7 @@ Notes:
 - Top-level flat keys are still accepted for backward compatibility.
 - If `dns.zone_ns`/`dns.zone_hostmaster` are omitted, defaults are derived per zone (`ns1.<zone>`, `hostmaster.<zone>`).
 - Set `[logging].query_log_enabled = true` (or `LEAF_LOG_QUERIES=true`) to enable per-query log events.
+- Set `[logging].drop_log_include_client_ip = true` (or `LEAF_LOG_DROP_CLIENT_IP=true`) to include `src_ip`/`src_port` on drop events only.
 - Per-query events are emitted at `info` level.
 
 ## Podman (Hetzner) Quickstart
@@ -237,6 +239,7 @@ For TOML, you can use either flat top-level keys (legacy) or the structured layo
 | `LEAF_MAX_TCP_FRAME_BYTES` | `4096` | Max accepted incoming TCP DNS frame length |
 | `LEAF_MAX_UDP_REQUEST_BYTES` | `1232` | Max accepted incoming UDP DNS payload |
 | `LEAF_LOG_QUERIES` | `false` | Emit per-query success logs (`event=udp_query`/`event=tcp_query`) without client IP or qname |
+| `LEAF_LOG_DROP_CLIENT_IP` | `false` | Include `src_ip`/`src_port` fields on drop events (`event=udp_drop`/`event=tcp_drop`) |
 
 TOML key mapping in structured layout:
 
@@ -250,6 +253,7 @@ TOML key mapping in structured layout:
 - `LEAF_LIMITER_MAX_TRACKED_IPS`, `LEAF_INVALID_QNAME_LIMITER_MAX_TRACKED_KEYS` -> `[limits] ...`
 - `LEAF_TCP_*`, `LEAF_MAX_TCP_FRAME_BYTES`, `LEAF_MAX_UDP_REQUEST_BYTES` -> `[limits] ...`
 - `LEAF_LOG_QUERIES` -> `[logging] query_log_enabled = ...` (legacy top-level `log_queries = ...` is also accepted)
+- `LEAF_LOG_DROP_CLIENT_IP` -> `[logging] drop_log_include_client_ip = ...` (legacy top-level `log_drop_client_ip = ...` is also accepted)
 
 ## Query Examples
 
@@ -283,6 +287,7 @@ Optional per-query success logging:
 - Emits one structured event per answered UDP request with `event=udp_query`.
 - Emits one structured event per answered TCP request with `event=tcp_query`.
 - Query logs intentionally omit client IP and full qname for data minimization.
+- Drop events can include `src_ip` and `src_port` when `LEAF_LOG_DROP_CLIENT_IP=true` (or `[logging] drop_log_include_client_ip = true`).
 - Startup events are `info`, dropped/invalid traffic is `warn`, and handler failures are `error`.
 
 For Podman:

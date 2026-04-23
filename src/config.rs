@@ -30,6 +30,7 @@ const DEFAULT_TCP_WRITE_TIMEOUT_MS: u64 = 3000;
 const DEFAULT_MAX_TCP_FRAME_BYTES: u32 = 4096;
 const DEFAULT_MAX_UDP_REQUEST_BYTES: u32 = 1232;
 const DEFAULT_QUERY_LOG_ENABLED: bool = false;
+const DEFAULT_DROP_LOG_INCLUDE_CLIENT_IP: bool = false;
 
 #[derive(Debug, StructOpt, Clone, Default)]
 #[structopt(name = "leaf", about = "Authoritative DNS for nip.io-style hostnames")]
@@ -105,6 +106,9 @@ pub struct Cli {
 
     #[structopt(long = "log-queries")]
     log_queries: Option<bool>,
+
+    #[structopt(long = "log-drop-client-ip")]
+    log_drop_client_ip: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -133,6 +137,7 @@ struct EnvConfig {
     max_tcp_frame_bytes: Option<u32>,
     max_udp_request_bytes: Option<u32>,
     log_queries: Option<bool>,
+    log_drop_client_ip: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -161,6 +166,7 @@ struct FileConfig {
     max_tcp_frame_bytes: Option<u32>,
     max_udp_request_bytes: Option<u32>,
     log_queries: Option<bool>,
+    log_drop_client_ip: Option<bool>,
     dns: Option<FileDnsConfig>,
     soa: Option<FileSoaConfig>,
     limits: Option<FileLimitsConfig>,
@@ -202,6 +208,7 @@ struct FileLimitsConfig {
 #[derive(Debug, Clone, Deserialize, Default)]
 struct FileLoggingConfig {
     query_log_enabled: Option<bool>,
+    drop_log_include_client_ip: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -229,6 +236,7 @@ struct RawConfigInputs {
     max_tcp_frame_bytes: Option<u32>,
     max_udp_request_bytes: Option<u32>,
     query_log_enabled: Option<bool>,
+    drop_log_include_client_ip: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -237,6 +245,7 @@ pub struct Config {
     pub listen: SocketAddr,
     pub limits: LimitsConfig,
     pub query_log_enabled: bool,
+    pub drop_log_include_client_ip: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -314,6 +323,7 @@ impl EnvConfig {
             max_tcp_frame_bytes: parse_env("LEAF_MAX_TCP_FRAME_BYTES")?,
             max_udp_request_bytes: parse_env("LEAF_MAX_UDP_REQUEST_BYTES")?,
             log_queries: parse_env("LEAF_LOG_QUERIES")?,
+            log_drop_client_ip: parse_env("LEAF_LOG_DROP_CLIENT_IP")?,
         })
     }
 }
@@ -364,6 +374,9 @@ impl TryFrom<RawConfigInputs> for Config {
             .max_udp_request_bytes
             .unwrap_or(DEFAULT_MAX_UDP_REQUEST_BYTES);
         let query_log_enabled = raw.query_log_enabled.unwrap_or(DEFAULT_QUERY_LOG_ENABLED);
+        let drop_log_include_client_ip = raw
+            .drop_log_include_client_ip
+            .unwrap_or(DEFAULT_DROP_LOG_INCLUDE_CLIENT_IP);
 
         if ttl == 0 {
             return Err(io::Error::new(
@@ -513,6 +526,7 @@ impl TryFrom<RawConfigInputs> for Config {
                 max_udp_request_bytes: max_udp_request_bytes as usize,
             },
             query_log_enabled,
+            drop_log_include_client_ip,
         })
     }
 }
@@ -709,6 +723,13 @@ fn merge_inputs(cli: Cli, env_config: EnvConfig, file_config: FileConfig) -> Raw
                 .log_queries
                 .or_else(|| file_logging.and_then(|logging| logging.query_log_enabled)),
         ),
+        drop_log_include_client_ip: pick(
+            cli.log_drop_client_ip,
+            env_config.log_drop_client_ip,
+            file_config
+                .log_drop_client_ip
+                .or_else(|| file_logging.and_then(|logging| logging.drop_log_include_client_ip)),
+        ),
     }
 }
 
@@ -844,6 +865,7 @@ mod tests {
             max_tcp_frame_bytes: Some(4096),
             max_udp_request_bytes: Some(1232),
             query_log_enabled: Some(false),
+            drop_log_include_client_ip: Some(false),
         }
     }
 
@@ -1029,8 +1051,10 @@ mod tests {
         };
         let file = FileConfig {
             log_queries: Some(false),
+            log_drop_client_ip: Some(false),
             logging: Some(FileLoggingConfig {
                 query_log_enabled: Some(false),
+                drop_log_include_client_ip: Some(false),
             }),
             ..FileConfig::default()
         };
@@ -1047,5 +1071,38 @@ mod tests {
             file,
         );
         assert_eq!(merged_env.query_log_enabled, Some(true));
+    }
+
+    #[test]
+    fn merge_drop_log_include_client_ip_prefers_cli_over_env_over_file() {
+        let cli = Cli {
+            log_drop_client_ip: Some(true),
+            ..Cli::default()
+        };
+        let env = EnvConfig {
+            log_drop_client_ip: Some(false),
+            ..EnvConfig::default()
+        };
+        let file = FileConfig {
+            log_drop_client_ip: Some(false),
+            logging: Some(FileLoggingConfig {
+                drop_log_include_client_ip: Some(false),
+                ..FileLoggingConfig::default()
+            }),
+            ..FileConfig::default()
+        };
+
+        let merged = merge_inputs(cli, env, file.clone());
+        assert_eq!(merged.drop_log_include_client_ip, Some(true));
+
+        let merged_env = merge_inputs(
+            Cli::default(),
+            EnvConfig {
+                log_drop_client_ip: Some(true),
+                ..EnvConfig::default()
+            },
+            file,
+        );
+        assert_eq!(merged_env.drop_log_include_client_ip, Some(true));
     }
 }

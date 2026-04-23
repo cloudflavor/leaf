@@ -28,6 +28,7 @@ struct RuntimeState {
     invalid_query_rate_limiter: InvalidQueryRateLimiter,
     limits: LimitsConfig,
     query_log_enabled: bool,
+    drop_log_include_client_ip: bool,
 }
 
 #[tokio::main]
@@ -49,6 +50,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         ),
         limits: config.limits.clone(),
         query_log_enabled: config.query_log_enabled,
+        drop_log_include_client_ip: config.drop_log_include_client_ip,
     };
 
     let tcp_connection_limiter = TcpConnectionLimiter::new(
@@ -82,8 +84,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
     info!(
         event = "startup",
-        message = "query logging configuration",
-        query_log_enabled = config.query_log_enabled
+        message = "logging configuration",
+        query_log_enabled = config.query_log_enabled,
+        drop_log_include_client_ip = config.drop_log_include_client_ip
     );
 
     tokio::try_join!(
@@ -101,26 +104,30 @@ async fn run_udp(socket: UdpSocket, runtime: RuntimeState) -> io::Result<()> {
         let (received, peer) = socket.recv_from(&mut buffer).await?;
 
         if received > runtime.limits.max_udp_request_bytes {
-            warn!(
-                event = "udp_drop",
-                reason = "request_too_large",
-                received_bytes = received,
-                limit_bytes = runtime.limits.max_udp_request_bytes
+            log_drop_with_size(
+                &runtime,
+                "udp_drop",
+                "request_too_large",
+                peer,
+                received,
+                runtime.limits.max_udp_request_bytes,
             );
             continue;
         }
 
         if !runtime.query_rate_limiter.allow(peer.ip()) {
-            warn!(event = "udp_drop", reason = "rate_limited");
+            log_drop_simple(&runtime, "udp_drop", "rate_limited", peer);
             continue;
         }
 
         if let Some(response) = runtime.authority.build_response(&buffer[..received]) {
             if !allow_invalid_query_response(&runtime, peer.ip(), &response) {
-                warn!(
-                    event = "udp_drop",
-                    reason = "invalid_query_rate_limited",
-                    rcode = ?response.response_code
+                log_drop_with_rcode(
+                    &runtime,
+                    "udp_drop",
+                    "invalid_query_rate_limited",
+                    peer,
+                    response.response_code,
                 );
                 continue;
             }
@@ -132,7 +139,7 @@ async fn run_udp(socket: UdpSocket, runtime: RuntimeState) -> io::Result<()> {
                 debug!(event = "udp_send_error", error = %error);
             }
         } else {
-            warn!(event = "udp_drop", reason = "parse_error");
+            log_drop_simple(&runtime, "udp_drop", "parse_error", peer);
         }
     }
 }
@@ -146,7 +153,7 @@ async fn run_tcp(
         let (stream, peer) = listener.accept().await?;
 
         let Some(connection_permit) = tcp_connection_limiter.try_acquire(peer.ip()) else {
-            warn!(event = "tcp_drop", reason = "connection_limit_reached");
+            log_drop_simple(&runtime, "tcp_drop", "connection_limit_reached", peer);
             continue;
         };
 
@@ -188,17 +195,19 @@ async fn handle_tcp_connection(
         }
 
         if frame_len > runtime.limits.max_tcp_frame_bytes {
-            warn!(
-                event = "tcp_drop",
-                reason = "request_too_large",
-                received_bytes = frame_len,
-                limit_bytes = runtime.limits.max_tcp_frame_bytes
+            log_drop_with_size(
+                &runtime,
+                "tcp_drop",
+                "request_too_large",
+                peer,
+                frame_len,
+                runtime.limits.max_tcp_frame_bytes,
             );
             return Ok(());
         }
 
         if !runtime.query_rate_limiter.allow(peer.ip()) {
-            warn!(event = "tcp_drop", reason = "rate_limited");
+            log_drop_simple(&runtime, "tcp_drop", "rate_limited", peer);
             return Ok(());
         }
 
@@ -212,15 +221,17 @@ async fn handle_tcp_connection(
         }
 
         let Some(response) = runtime.authority.build_response(&request) else {
-            warn!(event = "tcp_drop", reason = "parse_error");
+            log_drop_simple(&runtime, "tcp_drop", "parse_error", peer);
             return Ok(());
         };
 
         if !allow_invalid_query_response(&runtime, peer.ip(), &response) {
-            warn!(
-                event = "tcp_drop",
-                reason = "invalid_query_rate_limited",
-                rcode = ?response.response_code
+            log_drop_with_rcode(
+                &runtime,
+                "tcp_drop",
+                "invalid_query_rate_limited",
+                peer,
+                response.response_code,
             );
             return Ok(());
         }
@@ -345,4 +356,67 @@ fn is_invalid_query_response_code(response_code: ResponseCode) -> bool {
         response_code,
         ResponseCode::NXDomain | ResponseCode::Refused | ResponseCode::FormErr
     )
+}
+
+fn log_drop_simple(runtime: &RuntimeState, event: &str, reason: &str, peer: SocketAddr) {
+    if runtime.drop_log_include_client_ip {
+        warn!(
+            event = event,
+            reason = reason,
+            src_ip = %peer.ip(),
+            src_port = peer.port()
+        );
+        return;
+    }
+
+    warn!(event = event, reason = reason);
+}
+
+fn log_drop_with_size(
+    runtime: &RuntimeState,
+    event: &str,
+    reason: &str,
+    peer: SocketAddr,
+    received_bytes: usize,
+    limit_bytes: usize,
+) {
+    if runtime.drop_log_include_client_ip {
+        warn!(
+            event = event,
+            reason = reason,
+            received_bytes = received_bytes,
+            limit_bytes = limit_bytes,
+            src_ip = %peer.ip(),
+            src_port = peer.port()
+        );
+        return;
+    }
+
+    warn!(
+        event = event,
+        reason = reason,
+        received_bytes = received_bytes,
+        limit_bytes = limit_bytes
+    );
+}
+
+fn log_drop_with_rcode(
+    runtime: &RuntimeState,
+    event: &str,
+    reason: &str,
+    peer: SocketAddr,
+    response_code: ResponseCode,
+) {
+    if runtime.drop_log_include_client_ip {
+        warn!(
+            event = event,
+            reason = reason,
+            rcode = ?response_code,
+            src_ip = %peer.ip(),
+            src_port = peer.port()
+        );
+        return;
+    }
+
+    warn!(event = event, reason = reason, rcode = ?response_code);
 }

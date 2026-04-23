@@ -32,6 +32,7 @@ The server now includes the following protections and protocol behavior:
 - UDP hardening:
   - max datagram request size bound
 - Structured operational logs for startup and drop reasons (`rate_limited`, `invalid_query_rate_limited`, `request_too_large`, `parse_error`, `connection_limit_reached`).
+- Optional drop-source logging (`src_ip`, `src_port`) for drop events, controllable by config.
 - Optional per-query success logs (`udp_query`, `tcp_query`) controlled by config and minimized to avoid client identifiers.
 
 ## Runtime Configuration
@@ -72,6 +73,7 @@ Traffic and connection controls:
 - `LEAF_MAX_TCP_FRAME_BYTES` (default `4096`)
 - `LEAF_MAX_UDP_REQUEST_BYTES` (default `1232`)
 - `LEAF_LOG_QUERIES` (default `false`)
+- `LEAF_LOG_DROP_CLIENT_IP` (default `false`)
 
 ## Go-Live Deployment Checklist
 

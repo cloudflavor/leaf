@@ -43,3 +43,5 @@ max_udp_request_bytes = 1232
 [logging]
 # Set true to emit per-query UDP/TCP events at info level (no client IP/qname).
 query_log_enabled = false
+# Set true to include src_ip/src_port on drop events (`udp_drop`/`tcp_drop`) for abuse tooling (for example fail2ban).
+drop_log_include_client_ip = false
