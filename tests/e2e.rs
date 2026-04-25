@@ -433,7 +433,7 @@ fn binary_path() -> String {
                 .join(format!("leaf{}", std::env::consts::EXE_SUFFIX));
             path.exists()
                 .then(|| path.display().to_string())
-                .ok_or_else(|| std::env::VarError::NotPresent)
+                .ok_or(std::env::VarError::NotPresent)
         })
         .unwrap_or_else(|error| {
             panic!("failed to resolve test binary path from CARGO_BIN_EXE_leaf, CARGO_BIN_EXE_leaf_dns, or CARGO_TARGET_DIR fallback: {error}")
