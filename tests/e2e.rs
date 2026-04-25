@@ -423,7 +423,19 @@ fn build_multi_question_query(first: (&str, RecordType), second: (&str, RecordTy
 }
 
 fn binary_path() -> String {
-    std::env::var("CARGO_BIN_EXE_leaf").unwrap_or_else(|error| {
-        panic!("CARGO_BIN_EXE_leaf is not set for integration test: {error}")
-    })
+    std::env::var("CARGO_BIN_EXE_leaf")
+        .or_else(|_| std::env::var("CARGO_BIN_EXE_leaf_dns"))
+        .or_else(|_| {
+            let target_dir =
+                std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_string());
+            let path = PathBuf::from(target_dir)
+                .join("debug")
+                .join(format!("leaf{}", std::env::consts::EXE_SUFFIX));
+            path.exists()
+                .then(|| path.display().to_string())
+                .ok_or_else(|| std::env::VarError::NotPresent)
+        })
+        .unwrap_or_else(|error| {
+            panic!("failed to resolve test binary path from CARGO_BIN_EXE_leaf, CARGO_BIN_EXE_leaf_dns, or CARGO_TARGET_DIR fallback: {error}")
+        })
 }

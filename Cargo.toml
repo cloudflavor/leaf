@@ -1,7 +1,15 @@
 [package]
-name = "leaf"
+name = "leaf-dns"
 version = "0.2.1"
 edition = "2024"
+
+[lib]
+name = "leaf"
+path = "src/lib.rs"
+
+[[bin]]
+name = "leaf"
+path = "src/main.rs"
 
 [dependencies]
 hickory-proto = "0.25"

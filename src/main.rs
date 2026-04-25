@@ -1,7 +1,3 @@
-mod config;
-mod dns;
-mod limits;
-
 use std::error::Error;
 use std::io;
 use std::net::SocketAddr;
@@ -15,9 +11,9 @@ use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
-use crate::config::{Config, LimitsConfig};
-use crate::dns::{BuiltResponse, DnsAuthority};
-use crate::limits::{
+use leaf::config::{Config, LimitsConfig};
+use leaf::dns::{BuiltResponse, DnsAuthority};
+use leaf::limits::{
     InvalidQueryRateLimiter, QueryRateLimiter, TcpConnectionLimiter, TcpConnectionPermit,
 };
 
