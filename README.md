@@ -65,7 +65,7 @@ Response policy:
 
 - Rust toolchain (stable for local dev).
 - Linux/macOS shell environment for examples below.
-- For CI parity with this repo pipeline, nightly rust is used in GitLab jobs.
+- For CI parity with this repo pipeline, stable Rust (`rust:1-bookworm`) is used in GitLab jobs.
 - Podman (optional, for containerized deployment).
 
 ## Build
