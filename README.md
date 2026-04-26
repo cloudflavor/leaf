@@ -390,7 +390,7 @@ Quay publish job requires these CI/CD variables:
 
 Image destination defaults to:
 
-- `quay.io/cloudflavor/leaf:${GIT_COMMIT_TAG}` (fallback to `${CI_COMMIT_TAG}` in GitLab)
+- `quay.io/cloudflavor/leaf:${CI_COMMIT_TAG}`
 - `quay.io/cloudflavor/leaf:latest`
 
 Both tags are published as a multi-arch manifest list.

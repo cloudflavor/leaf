@@ -74,7 +74,7 @@ cargo_package:
   script:
     - cargo package --locked
   rules:
-    - if: $CI_COMMIT_TAG || $GIT_COMMIT_TAG
+    - if: $CI_COMMIT_TAG
 
 cargo_publish:
   stage: release
@@ -89,23 +89,28 @@ cargo_publish:
     - test -n "$CARGO_REGISTRY_TOKEN"
     - cargo publish --locked
   rules:
-    - if: $CI_COMMIT_TAG || $GIT_COMMIT_TAG
+    - if: $CI_COMMIT_TAG
 
 release:
   stage: release
+  image:
+    name: rust:1-bookworm
+    docker:
+      user: "0:0"
   variables:
     CARGO_TARGET_DIR: "$CI_PROJECT_DIR/target/$CI_JOB_NAME_SLUG"
     CARGO_HOME: "$CI_PROJECT_DIR/.cargo/$CI_JOB_NAME_SLUG"
+    CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: x86_64-linux-gnu-gcc
+    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
   cache:
     key: "$CI_COMMIT_REF_SLUG-$CI_JOB_NAME_SLUG"
     paths:
       - .cargo/
       - target/
   script:
-    - apt-get update && apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross && rm -rf /var/lib/apt/lists/*
+    - apt-get update && apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross gcc-x86-64-linux-gnu libc6-dev-amd64-cross && rm -rf /var/lib/apt/lists/*
     - rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
-    - RELEASE_TAG="${GIT_COMMIT_TAG:-${CI_COMMIT_TAG:-${CI_COMMIT_SHORT_SHA}}}"
-    - export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+    - RELEASE_TAG="$CI_COMMIT_TAG"
     - cargo build --release --locked --target x86_64-unknown-linux-gnu
     - cargo build --release --locked --target aarch64-unknown-linux-gnu
     - mkdir -p "dist/leaf-amd64-linux-${RELEASE_TAG}" "dist/leaf-arm64-linux-${RELEASE_TAG}"
@@ -130,6 +135,8 @@ container_release:
   image:
     name: quay.io/buildah/stable:v1.39.3
     entrypoint: [""]
+    docker:
+      user: "0:0"
   cache: []
   before_script: []
   variables:
@@ -142,7 +149,7 @@ container_release:
   script:
     - test -n "$QUAY_USERNAME"
     - test -n "$QUAY_PASSWORD"
-    - RELEASE_TAG="${GIT_COMMIT_TAG:-${CI_COMMIT_TAG:-}}"
+    - RELEASE_TAG="$CI_COMMIT_TAG"
     - test -n "$RELEASE_TAG"
     - QUAY_REGISTRY="${QUAY_REGISTRY:-quay.io}"
     - QUAY_ORG="${QUAY_ORG:-cloudflavor}"
@@ -160,4 +167,4 @@ container_release:
     - buildah manifest push --all "$MANIFEST_NAME" "docker://$IMAGE_REF:latest"
     - buildah manifest rm "$MANIFEST_NAME"
   rules:
-    - if: $CI_COMMIT_TAG || $GIT_COMMIT_TAG
+    - if: $CI_COMMIT_TAG
