@@ -2,6 +2,8 @@
 name = "leaf-dns"
 version = "0.2.1"
 edition = "2024"
+description = "Authoritative DNS server for nip.io-style hostnames"
+license = "Apache-2.0"
 
 [lib]
 name = "leaf"
